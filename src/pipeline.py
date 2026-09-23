@@ -34,6 +34,7 @@ class MedicalRetrievalPipeline:
             max_length=self.config.embedding.max_length,
             normalize_embeddings=self.config.embedding.normalize_embeddings,
             device=self.config.embedding.device,
+            use_fp16=self.config.embedding.use_fp16,
         )
         self.reranker = None
         if self.config.reranker.enabled:
@@ -41,6 +42,7 @@ class MedicalRetrievalPipeline:
                 model_name=self.config.reranker.model_name,
                 batch_size=self.config.reranker.batch_size,
                 device=self.config.reranker.device,
+                use_fp16=self.config.reranker.use_fp16,
             )
 
         self.dense_index: DenseIndex | None = None

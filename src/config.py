@@ -36,6 +36,7 @@ class EmbeddingConfig(BaseModel):
     max_length: int = 512
     normalize_embeddings: bool = True
     device: str = "auto"
+    use_fp16: bool = True
 
 
 class RetrievalConfig(BaseModel):
@@ -53,6 +54,7 @@ class RerankerConfig(BaseModel):
     model_name: str = "BAAI/bge-reranker-large"
     batch_size: int = 16
     device: str = "auto"
+    use_fp16: bool = True
     top_k_chunks: int = 10
     top_k_docs: int = 5
     score_threshold: float = -5.0

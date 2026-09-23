@@ -16,18 +16,20 @@ class BGEM3Embedder:
         batch_size: int = 16,
         max_length: int = 512,
         normalize_embeddings: bool = True,
+        use_fp16: bool = True,
     ):
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
         self.normalize_embeddings = normalize_embeddings
+        self.use_fp16 = use_fp16
 
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             self.device = device
 
-        logger.info(f"Initializing BGEM3Embedder with model='{model_name}' on device='{self.device}'")
+        logger.info(f"Initializing BGEM3Embedder with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}")
         self._model = None
 
     @property
@@ -36,7 +38,15 @@ class BGEM3Embedder:
         if self._model is None:
             from sentence_transformers import SentenceTransformer
             logger.info(f"Loading embedding model weights from {self.model_name}...")
-            self._model = SentenceTransformer(self.model_name, device=self.device)
+            model_kwargs = {}
+            if self.use_fp16 and self.device == "cuda":
+                model_kwargs["torch_dtype"] = torch.float16
+
+            self._model = SentenceTransformer(
+                self.model_name,
+                device=self.device,
+                model_kwargs=model_kwargs if model_kwargs else None,
+            )
             self._model.max_seq_length = self.max_length
         return self._model
 

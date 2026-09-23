@@ -27,6 +27,7 @@ embedding:
   max_length: 512
   normalize_embeddings: true
   device: "auto"            # "cuda", "cpu", or "auto"
+  use_fp16: true            # Saves ~50% VRAM (fits in 6GB GPU)
 
 retrieval:
   dense_top_k: 50
@@ -42,6 +43,7 @@ reranker:
   model_name: "BAAI/bge-reranker-large"
   batch_size: 16
   device: "auto"
+  use_fp16: true            # Saves ~50% VRAM
   top_k_chunks: 10          # Number of chunks to select per query
   top_k_docs: 5             # Maximum distinct documents to select per query
   score_threshold: -5.0     # Minimum cross-encoder logit score filter
