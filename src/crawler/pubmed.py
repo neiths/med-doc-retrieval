@@ -1,6 +1,8 @@
 """PubMed client for fetching candidate English medical documents via NCBI Entrez and Europe PMC."""
 
+import json
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -8,7 +10,7 @@ from loguru import logger
 
 
 class PubMedClient:
-    """Client for querying PubMed using NCBI Entrez E-utilities and Europe PMC API."""
+    """Client for querying PubMed using Europe PMC API and NCBI Entrez E-utilities."""
 
     NCBI_ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     NCBI_EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -19,18 +21,198 @@ class PubMedClient:
         email: str = "team@r2ai2026.org",
         api_key: str | None = None,
         timeout_seconds: int = 15,
+        cache_file: Path | str | None = "data/processed/pubmed_cache.jsonl",
     ):
         self.email = email
         self.api_key = api_key
         self.timeout = httpx.Timeout(timeout_seconds)
+        self.cache_file = Path(cache_file) if cache_file else None
+        self._memory_cache: dict[str, dict[str, Any]] = self._load_cache()
 
+    def _load_cache(self) -> dict[str, dict[str, Any]]:
+        """Loads cached articles indexed by doc_id (PMID)."""
+        cache = {}
+        if self.cache_file and self.cache_file.exists():
+            with open(self.cache_file, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            item = json.loads(line)
+                            if "doc_id" in item:
+                                cache[str(item["doc_id"])] = item
+                        except Exception:
+                            continue
+            logger.info(f"Loaded {len(cache)} cached PubMed articles from {self.cache_file}")
+        return cache
+
+    def _append_cache(self, articles: list[dict[str, Any]]):
+        """Appends newly retrieved articles to disk and memory cache."""
+        new_items = []
+        for art in articles:
+            doc_id = str(art["doc_id"])
+            if doc_id not in self._memory_cache:
+                self._memory_cache[doc_id] = art
+                new_items.append(art)
+
+        if new_items and self.cache_file:
+            self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.cache_file, "a", encoding="utf-8") as f:
+                for item in new_items:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    def search_europe_pmc_sync(self, query: str, page_size: int = 30) -> list[dict[str, Any]]:
+        """Synchronous search on Europe PMC API."""
+        params = {
+            "query": query,
+            "format": "json",
+            "pageSize": page_size,
+            "resultType": "core",
+        }
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                response = client.get(self.EUROPE_PMC_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+            results = []
+            for item in data.get("resultList", {}).get("result", []):
+                pmid = item.get("pmid")
+                if not pmid:
+                    continue
+                title = item.get("title", "")
+                abstract = item.get("abstractText", "")
+                full_text = f"{title}\n\n{abstract}" if title and abstract else (title or abstract)
+                results.append({
+                    "doc_id": str(pmid),
+                    "title": title,
+                    "text": full_text,
+                    "lang": "en",
+                    "source": "europe_pmc",
+                })
+            return results
+        except Exception as e:
+            logger.warning(f"Europe PMC search failed for '{query}': {e}")
+            return []
+
+    def search_ncbi_sync(self, query: str, retmax: int = 30) -> list[dict[str, Any]]:
+        """Synchronous search on NCBI ESearch + EFetch."""
+        params_esearch = {
+            "db": "pubmed",
+            "term": query,
+            "retmax": retmax,
+            "retmode": "json",
+            "email": self.email,
+        }
+        if self.api_key:
+            params_esearch["api_key"] = self.api_key
+
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                res = client.get(self.NCBI_ESEARCH_URL, params=params_esearch)
+                res.raise_for_status()
+                data = res.json()
+                pmids = data.get("esearchresult", {}).get("idlist", [])
+
+                if not pmids:
+                    return []
+
+                # Check cache first
+                uncached_pmids = [p for p in pmids if p not in self._memory_cache]
+                articles = [self._memory_cache[p] for p in pmids if p in self._memory_cache]
+
+                if uncached_pmids:
+                    params_efetch = {
+                        "db": "pubmed",
+                        "id": ",".join(uncached_pmids),
+                        "retmode": "xml",
+                        "email": self.email,
+                    }
+                    if self.api_key:
+                        params_efetch["api_key"] = self.api_key
+
+                    res_fetch = client.get(self.NCBI_EFETCH_URL, params=params_efetch)
+                    res_fetch.raise_for_status()
+
+                    root = ET.fromstring(res_fetch.text)
+                    newly_fetched = []
+                    for article in root.findall(".//PubmedArticle"):
+                        pmid_elem = article.find(".//MedlineCitation/PMID")
+                        pmid = pmid_elem.text if pmid_elem is not None else ""
+                        if not pmid:
+                            continue
+
+                        title_elem = article.find(".//ArticleTitle")
+                        title = "".join(title_elem.itertext()).strip() if title_elem is not None else ""
+
+                        abstract_texts = []
+                        for abs_elem in article.findall(".//AbstractText"):
+                            label = abs_elem.get("Label")
+                            text = "".join(abs_elem.itertext()).strip()
+                            if label:
+                                abstract_texts.append(f"{label}: {text}")
+                            elif text:
+                                abstract_texts.append(text)
+                        abstract = "\n".join(abstract_texts).strip()
+
+                        full_text = f"{title}\n\n{abstract}" if title and abstract else (title or abstract)
+                        newly_fetched.append({
+                            "doc_id": str(pmid),
+                            "title": title,
+                            "text": full_text,
+                            "lang": "en",
+                            "source": "pubmed",
+                        })
+
+                    self._append_cache(newly_fetched)
+                    articles.extend(newly_fetched)
+
+                return articles
+        except Exception as e:
+            logger.warning(f"NCBI Search/Fetch failed for '{query}': {e}")
+            return []
+
+    def search_candidate_articles(
+        self,
+        query: str,
+        top_k: int = 30,
+        source: str = "europe_pmc",
+    ) -> list[dict[str, Any]]:
+        """Fetches candidates using Europe PMC with fallback to NCBI, with deduplication and caching."""
+        if not query or not query.strip():
+            return []
+
+        results = []
+        if source in ["europe_pmc", "hybrid"]:
+            results = self.search_europe_pmc_sync(query, page_size=top_k)
+            self._append_cache(results)
+
+        if (not results or len(results) < top_k) and source in ["ncbi", "hybrid"]:
+            ncbi_results = self.search_ncbi_sync(query, retmax=top_k)
+            results.extend(ncbi_results)
+
+        # Fallback to NCBI if Europe PMC returned empty
+        if not results and source == "europe_pmc":
+            results = self.search_ncbi_sync(query, retmax=top_k)
+
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for art in results:
+            did = str(art["doc_id"])
+            if did not in seen:
+                seen.add(did)
+                deduped.append(art)
+
+        return deduped[:top_k]
+
+    # Asynchronous methods for batch / crawler usage
     async def search_ncbi_pmids(
         self,
         query: str,
         retmax: int = 50,
         client: httpx.AsyncClient | None = None,
     ) -> list[str]:
-        """Search NCBI for PMIDs matching query."""
+        """Search NCBI for PMIDs matching query asynchronously."""
         params = {
             "db": "pubmed",
             "term": query,
@@ -45,8 +227,7 @@ class PubMedClient:
             response = await c.get(self.NCBI_ESEARCH_URL, params=params)
             response.raise_for_status()
             data = response.json()
-            id_list = data.get("esearchresult", {}).get("idlist", [])
-            return id_list
+            return data.get("esearchresult", {}).get("idlist", [])
 
         try:
             if client:
@@ -62,7 +243,7 @@ class PubMedClient:
         pmids: list[str],
         client: httpx.AsyncClient | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch title and abstract for a list of PMIDs via EFetch XML."""
+        """Fetch title and abstract for a list of PMIDs via EFetch XML asynchronously."""
         if not pmids:
             return []
 
@@ -90,7 +271,6 @@ class PubMedClient:
             logger.warning(f"NCBI EFetch failed for {len(pmids)} PMIDs: {e}")
             return []
 
-        # Parse XML
         articles = []
         try:
             root = ET.fromstring(xml_text)
@@ -114,9 +294,8 @@ class PubMedClient:
                 abstract = "\n".join(abstract_texts).strip()
 
                 full_text = f"{title}\n\n{abstract}" if title and abstract else (title or abstract)
-
                 articles.append({
-                    "doc_id": pmid,
+                    "doc_id": str(pmid),
                     "title": title,
                     "text": full_text,
                     "lang": "en",
@@ -133,7 +312,7 @@ class PubMedClient:
         page_size: int = 50,
         client: httpx.AsyncClient | None = None,
     ) -> list[dict[str, Any]]:
-        """Search Europe PMC as an alternative or complement to NCBI."""
+        """Search Europe PMC asynchronously."""
         params = {
             "query": query,
             "format": "json",
