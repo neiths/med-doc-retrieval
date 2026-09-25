@@ -2,73 +2,67 @@
 
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![uv](https://img.shields.io/badge/environment-uv-purple.svg)](https://github.com/astral-sh/uv)
-[![Embedding](https://img.shields.io/badge/Embedding-BGE--M3-green.svg)](https://huggingface.co/BAAI/bge-m3)
-[![Reranker](https://img.shields.io/badge/Reranker-BGE--Reranker-orange.svg)](https://huggingface.co/BAAI/bge-reranker-large)
+[![Vector DB](https://img.shields.io/badge/Vector_DB-Qdrant_Local-red.svg)](https://qdrant.tech/)
+[![Embedding](https://img.shields.io/badge/Embedding-BGE--M3_(FP16)-green.svg)](https://huggingface.co/BAAI/bge-m3)
+[![Reranker](https://img.shields.io/badge/Reranker-BGE--Reranker_(FP16)-orange.svg)](https://huggingface.co/BAAI/bge-reranker-large)
 
-Hệ thống truy hồi thông tin y tế đa ngôn ngữ (**Multilingual Medical Document Retrieval System**) phục vụ cuộc thi **Road to AI 2026 (R2AI)**.
+Hệ thống truy hồi thông tin y sinh đa ngôn ngữ (**Multilingual Medical Document Retrieval System**) phục vụ cuộc thi **Road to AI 2026 (R2AI)**.
 
-Hệ thống giải quyết bài toán "khoảng cách thông tin y tế" xuyên ngôn ngữ:
-- **Truy vấn đầu vào:** Tiếng Việt (VI).
-- **Kho tri thức truy hồi:** Đa ngôn ngữ (Tiếng Việt - Tiếng Anh - Tiếng Trung).
-- **Mục tiêu:** Xác định chính xác tài liệu liên quan (**Document-level**) và trích xuất nguyên vẹn đoạn văn bản chứa thông tin liên quan (**Chunk-level**) theo thang đo **Macro F2** ($\beta = 2$).
+Hệ thống được thiết kế để giải quyết bài toán "khoảng cách thông tin y tế" xuyên ngôn ngữ:
+- **Truy vấn đầu vào (Query):** Tiếng Việt (VI).
+- **Kho tri thức truy hồi:** Đa ngôn ngữ (**Tiếng Việt - Tiếng Anh - Tiếng Trung**).
+- **Mục tiêu:** Định vị chính xác tài liệu liên quan (**Document-level**) và trích xuất nguyên vẹn đoạn văn bản chứa bằng chứng y khoa (**Chunk-level**) theo độ đo **Macro F2** ($\beta = 2$).
 
 ---
 
-## 🏗️ Kiến trúc Hệ thống (System Architecture)
+## 🏗️ Tổng quan Kiến trúc Hệ thống (System Architecture)
 
 ```text
-               ┌───────────────────────────┐
-               │    User Query (VI)        │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │ Query Processing          │
-               └─────────────┬─────────────┘
-                             │
-             ┌───────────────┴───────────────┐
-             │                               │
-             ▼                               ▼
-  ┌──────────────────────┐       ┌──────────────────────┐
-  │ Dense Retrieval      │       │ Sparse Retrieval     │
-  │ BGE-M3 + FAISS       │       │ BM25 (Jieba/PyVi)    │
-  │ (Semantic Search)    │       │ (Keyword Matching)   │
-  └──────────┬───────────┘       └──────────┬───────────┘
-             │                              │
-             └───────────────┬──────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │ Reciprocal Rank Fusion    │
-               │ (RRF Coarse Selection)    │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │ Cross-Encoder Re-ranking  │
-               │ (BGE-Reranker-Large)      │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │ Formatter & Packager      │
-               │ (Official ZIP Submission) │
-               └───────────────────────────┘
+                           [User Query (VI)]
+                                   │
+         ┌─────────────────────────┴─────────────────────────┐
+         ▼ (Nhánh Offline: VI & ZH)                          ▼ (Nhánh Online: EN)
+┌───────────────────────────────────┐             ┌───────────────────────────────────┐
+│ Raw Data (URLs BTC cấp)           │             │ Query Translator (MarianMT)       │
+│ └──> Ingestion & Exact Chunking   │             │ └──> Medical Term Extraction (EN) │
+│ └──> BGE-M3 Dense & Sparse Encode │             │ └──> PubMed / Europe PMC API      │
+│ └──> Qdrant Local Engine Storage  │             │ └──> Fetch Abstracts & On-the-fly │
+└─────────────────┬─────────────────┘             └─────────────────┬─────────────────┘
+                  │                                                 │
+                  ▼                                                 ▼
+     [Qdrant Native Hybrid Search]                     [PubMed Candidate Chunks]
+     (Dense + Sparse Vector + RRF)                                  │
+                  │                                                 │
+                  └────────────────────────┬────────────────────────┘
+                                           │
+                                           ▼
+                           [Gộp Toàn Bộ Ứng Viên Đa Ngôn Ngữ]
+                                           │
+                                           ▼
+                           [Cross-Encoder Reranker (FP16)]
+                           (BAAI/bge-reranker-large Scoring)
+                                           │
+                                           ▼
+                           [Top-K Documents & Chunks Selection]
+                                           │
+                                           ▼
+                           [Submission Validator & Packager]
+                           (Tự động tạo file ZIP chuẩn Leaderboard)
 ```
 
 ---
 
-## ⚙️ Tech Stack & Tuân thủ Quy chế Cuộc thi
+## ⚙️ Tech Stack & Tuân thủ Quy chế Cuộc thi (Constraints Compliance)
 
-| Thành phần | Công nghệ / Mô hình | Đáp ứng Quy chế (Constraints Compliance) |
+| Thành phần | Công nghệ / Mô hình | Đáp ứng Quy chế (Rules & Constraints) |
 | :--- | :--- | :--- |
-| **Quản lý Môi trường** | `uv` + Python 3.11 | Cực nhanh, tái lập 100% môi trường (`uv.lock`) |
-| **Embedding Model** | `BAAI/bge-m3` | Mã nguồn mở, đa ngôn ngữ VI/EN/ZH, $\le 14B$, phát hành trước 06/2026 |
-| **Re-ranker** | `BAAI/bge-reranker-large` / `v2-m3` | Trọng số mở, cross-encoder tối ưu độ nhạy y khoa |
-| **Vector Index** | FAISS (`IndexFlatIP`) | Chạy hoàn toàn cục bộ (offline / local), tốc độ cao |
-| **Sparse Index** | BM25Okapi (`rank-bm25`) | Tokenizer ngôn ngữ: `pyvi` (VI), `jieba` (ZH) |
-| **Crawler & Data** | `trafilatura` + `httpx` + NCBI/Europe PMC | Trích xuất sạch web VI/ZH và tìm kiếm abstracts PubMed |
-| **Độ đo đánh giá** | Macro F2 (Doc & Chunk) | Tối ưu hóa cho Recall ($\beta = 2$) theo công thức BTC |
+| **Quản lý Môi trường** | `uv` + Python 3.11 | Tối ưu hóa cài đặt cực nhanh, đồng bộ 100% qua `uv.lock`. |
+| **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense + Sparse) & RRF trực tiếp ở tầng engine. |
+| **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số, phát hành trước 06/2026. |
+| **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và chunk đa ngôn ngữ. |
+| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` + MeSH Lexicon | Mô hình dịch mở ~289MB, trích xuất từ khóa y khoa tiếng Anh phục vụ truy vấn PubMed. |
+| **External Medical API** | Europe PMC REST API & NCBI Entrez E-utilities | Tìm kiếm bài báo PubMed theo từ khóa và lưu cache tự động tại `pubmed_cache.jsonl`. |
+| **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. |
 
 ---
 
@@ -77,72 +71,81 @@ Hệ thống giải quyết bài toán "khoảng cách thông tin y tế" xuyên
 ```text
 med-doc-retrieval/
 ├── configs/
-│   └── config.yaml             # Cấu hình siêu tham số (chunk size, weights, models, top-k)
-├── data/
+│   └── config.yaml             # Cấu hình siêu tham số (Qdrant, FP16, chunk size, top-k, weights)
+├── data/                       # Đã cấu hình .gitignore (bảo vệ an toàn dữ liệu)
 │   ├── raw/                    # Dữ liệu thô từ BTC (urls.jsonl, queries.jsonl)
-│   ├── processed/              # Dữ liệu đã cào & làm sạch (chunks.jsonl, all_articles.jsonl)
-│   └── indices/                # Chỉ mục lưu trữ FAISS dense & BM25 sparse
+│   ├── processed/              # Chứa chunks.jsonl, pubmed_cache.jsonl
+│   └── indices/                # Qdrant Local Engine database (data/indices/qdrant_db)
 ├── src/
-│   ├── __init__.py
-│   ├── config.py               # Pydantic Settings & Config Loader
-│   ├── crawler/                # Thu thập dữ liệu
-│   │   ├── url_scraper.py      # Async scraper cho URL bài báo VI và ZH (Trafilatura)
-│   │   └── pubmed.py           # Client tra cứu PubMed / Europe PMC cho EN
-│   ├── ingestion/              # Tiền xử lý & cắt đoạn
-│   │   ├── cleaner.py          # Chuẩn hóa Unicode NFC & ngôn ngữ
-│   │   └── chunker.py          # Chunking bảo toàn nguyên vẹn chuỗi con (doc_id & text)
+│   ├── config.py               # Pydantic schema quản lý cấu hình hệ thống
+│   ├── crawler/                # Thu thập dữ liệu đa ngôn ngữ
+│   │   ├── url_scraper.py      # Async scraper cho URLs bài viết VI và ZH (Trafilatura)
+│   │   ├── pubmed.py           # Client tra cứu PubMed / Europe PMC (có disk cache)
+│   │   └── query_translator.py # Bộ dịch MarianMT & trích xuất từ khóa y khoa VI -> EN
+│   ├── ingestion/              # Tiền xử lý & phân đoạn
+│   │   ├── cleaner.py          # Chuẩn hóa Unicode NFC & lọc ngôn ngữ
+│   │   └── chunker.py          # Phân đoạn bảo toàn nguyên vẹn chuỗi con & doc_id
 │   ├── embedding/              # Vector hóa
-│   │   └── bge_m3.py           # BGE-M3 Dense Embedder (CUDA/CPU)
+│   │   └── bge_m3.py           # BGE-M3 Embedder (hỗ trợ FP16, tối ưu VRAM)
 │   ├── retrieval/              # Tìm kiếm lai (Hybrid Search)
-│   │   ├── dense_index.py      # FAISS Dense Index
+│   │   ├── qdrant_index.py     # Qdrant Local Engine (Native Dense + Sparse + RRF)
+│   │   ├── dense_index.py      # FAISS Dense Index (dự phòng)
 │   │   ├── sparse_index.py     # BM25 Sparse Index (Jieba & PyVi tokenization)
-│   │   └── hybrid.py           # Reciprocal Rank Fusion (RRF) & Convex Combination
+│   │   └── hybrid.py           # Reciprocal Rank Fusion kết hợp
 │   ├── reranker/               # Tinh chỉnh xếp hạng
-│   │   └── bge_reranker.py     # Cross-Encoder Reranker
+│   │   └── bge_reranker.py     # Cross-Encoder Reranker (hỗ trợ FP16)
 │   ├── evaluation/             # Đánh giá nội bộ
-│   │   └── metrics.py          # Precision, Recall, Macro F2 (Doc & Chunk level)
+│   │   └── metrics.py          # Precision, Recall, Macro F2 (Doc & Chunk levels)
 │   ├── submission/             # Đóng gói nộp bài
-│   │   └── formatter.py        # Validate JSON schema & tạo ZIP nộp bài chuẩn
+│   │   └── formatter.py        # Schema validator & tự động nén ZIP phẳng
 │   └── pipeline.py             # Điều phối End-to-end Pipeline
-├── notebooks/                  # Jupyter notebooks thử nghiệm và EDA
-│   └── 01_baseline_exploration.ipynb
-├── tests/                      # Unit tests (metrics, chunker, submission, tokenizer)
-│   ├── test_metrics.py
+├── notebooks/
+│   └── 01_baseline_exploration.ipynb # Notebook mẫu thử nghiệm từng thành phần
+├── scripts/
+│   └── test_gpu_memory.py      # Script stress test VRAM trên GPU (RTX 3050 6GB)
+├── tests/                      # Bộ kiểm thử tự động (14/14 tests passing)
 │   ├── test_chunker.py
+│   ├── test_metrics.py
+│   ├── test_qdrant.py
+│   ├── test_query_translator.py
 │   ├── test_submission.py
 │   └── test_tokenization.py
-├── outputs/
-│   └── submissions/            # Chứa các file kết quả submission.zip
-├── .env.example                # File mẫu biến môi trường (NCBI, HuggingFace)
-├── .gitignore                  # Bỏ qua data nặng, indices và checkpoint
-├── .python-version             # Khóa Python 3.11
+├── outputs/submissions/        # Nơi lưu file kết quả submission.zip
+├── .env.example                # Template biến môi trường (NCBI, HuggingFace)
 ├── pyproject.toml              # Quản lý dependencies với uv
-├── main.py                     # CLI entrypoint điều khiển hệ thống
-├── TEAM_GUIDE.md               # Hướng dẫn chi tiết cho thành viên làm việc nhóm
-├── competition_guide.md        # Hướng dẫn và thể lệ cuộc thi
-└── README.md
+├── uv.lock                     # Khóa phiên bản đảm bảo tính đồng nhất 100%
+├── main.py                     # CLI điều khiển hệ thống
+├── TEAM_GUIDE.md               # Cẩm nang làm việc nhóm và quy ước Git
+├── competition_guide.md        # Điều lệ cuộc thi chính thức
+└── README.md                   # Tài liệu hướng dẫn dự án
 ```
 
 ---
 
 ## 🚀 Khởi chạy Nhanh (Quickstart)
 
-### 1. Cài đặt môi trường với `uv`
+### Bước 1: Cài đặt môi trường với `uv`
 ```bash
-# Đồng bộ hóa dependencies và kích hoạt môi trường ảo
+# 1. Đồng bộ hóa toàn bộ môi trường và dev dependencies
 uv sync --extra dev
+
+# 2. Kích hoạt môi trường ảo
 source .venv/bin/activate
 ```
 
-### 2. Thiết lập cấu hình môi trường
+### Bước 2: Chạy kiểm thử tự động
 ```bash
-cp .env.example .env
-```
-
-### 3. Kiểm tra unit test
-```bash
+# Đảm bảo 14 bài kiểm thử đều PASS
 uv run pytest
 ```
+
+### Bước 3: Benchmark VRAM trên GPU
+```bash
+# Kiểm tra bộ nhớ VRAM với BGE-M3 và BGE-Reranker (FP16)
+uv run python scripts/test_gpu_memory.py
+```
+> [!NOTE]  
+> Trên GPU **RTX 3050 Laptop (6GB VRAM)**, cả 2 mô hình nạp đồng thời ở chế độ **FP16** chỉ chiếm **~2.13 GB VRAM**, dư thừa hơn **3.5 GB VRAM** cho các tác vụ khác.
 
 ---
 
@@ -150,40 +153,65 @@ uv run pytest
 
 Hệ thống cung cấp giao diện dòng lệnh đồng nhất qua `main.py`:
 
-### 📥 Bước 1: Thu thập dữ liệu
-- **Cào bài viết từ URL BTC cung cấp (Tiếng Việt & Tiếng Trung):**
-  ```bash
-  python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 10
-  ```
-- **Tìm kiếm & tải bài báo PubMed tiếng Anh:**
-  ```bash
-  python main.py fetch-pubmed --query "kidney stone treatment" --max-results 100 --output data/processed/pubmed_articles.jsonl
-  ```
-
-### 🔨 Bước 2: Xây dựng chỉ mục (Index)
-Gộp các tài liệu vào `data/processed/all_articles.jsonl`, sau đó chạy:
+### 1. Thu thập dữ liệu từ URL (Tiếng Việt & Tiếng Trung)
 ```bash
-python main.py build-index --input data/processed/all_articles.jsonl --output-dir data/indices/
+python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 10
 ```
 
-### 🔍 Bước 3: Tìm kiếm thử nghiệm một câu hỏi
+### 2. Thu thập dữ liệu tiếng Anh từ PubMed (Ngoại tuyến)
+```bash
+python main.py fetch-pubmed --query "kidney stone treatment" --max-results 100 --output data/processed/pubmed_articles.jsonl
+```
+
+### 3. Xây dựng chỉ mục Qdrant Local Engine
+Gộp các tài liệu vào `data/processed/all_articles.jsonl`, sau đó chạy:
+```bash
+python main.py build-index --input data/processed/all_articles.jsonl --output-dir data/indices
+```
+Chỉ mục sẽ được lưu trực tiếp vào database cục bộ tại `data/indices/qdrant_db`.
+
+### 4. Tìm kiếm thử nghiệm một câu hỏi (End-to-End Search)
 ```bash
 python main.py search "Cần làm gì đối với tình trạng tắc nghẽn đường tiết niệu do sỏi thận?"
 ```
+*Hệ thống sẽ tự động:*
+1. Tìm kiếm Hybrid trong **Qdrant** (các bài VI & ZH đã index).
+2. Dịch câu hỏi sang tiếng Anh & gọi **PubMed API** lấy các bài báo liên quan (nhánh EN).
+3. Gộp ứng viên và chạy **BGE-Reranker** để in ra Top-K tài liệu và đoạn văn bản liên quan nhất từ cả 3 ngôn ngữ.
 
-### 📊 Bước 4: Đánh giá mô hình (Macro F2 Score)
+### 5. Đánh giá nội bộ trên tập Validation (Macro F2 Score)
 ```bash
 python main.py evaluate --predictions outputs/val_predictions.json --ground-truth data/raw/val_groundtruth.json
 ```
 
-### 📦 Bước 5: Sinh file nộp bài (Leaderboard Submission)
+### 6. Sinh file nộp bài chính thức (Leaderboard Submission)
 ```bash
 python main.py generate-submission --queries data/raw/queries.jsonl --name submission.json
 ```
-Lệnh sẽ kiểm tra schema và tạo file ZIP chuẩn tại `outputs/submissions/submission.zip`. Tải trực tiếp file này lên Dashboard cuộc thi tại http://leaderboard.aiguru.com.vn/.
+Lệnh sẽ kiểm tra schema và tạo file ZIP phẳng tại **`outputs/submissions/submission.zip`** sẵn sàng nộp thẳng lên Dashboard cuộc thi!
 
 ---
 
-## 👥 Làm việc Nhóm
+## 📊 Phương pháp Đánh giá (Evaluation Metric)
 
-Xem chi tiết quy trình làm việc nhóm, chia sẻ dữ liệu và phân chia nhánh Git tại **[TEAM_GUIDE.md](TEAM_GUIDE.md)**.
+Hiệu suất được đánh giá ở hai cấp độ: **Document** và **Chunk** bằng thang đo **Macro F2** ($\beta = 2$):
+
+$$F_2 = \frac{5 \times \mathrm{Precision} \times \mathrm{Recall}}{4 \times \mathrm{Precision} + \mathrm{Recall}}$$
+
+- Điểm F2 macro được tính bằng trung bình cộng điểm F2 của tất cả các câu hỏi kiểm thử.
+- Trọng số $\beta = 2$ ưu tiên **Recall** cao gấp 2 lần **Precision**.
+
+---
+
+## 📋 Checklist Trước Khi Nộp Bài Lên Dashboard
+1. [ ] **Định dạng file ZIP:** Phải là file ZIP phẳng, chỉ chứa **duy nhất 1 file `.json`** (không nằm trong thư mục con).
+2. [ ] **Cấu trúc trường:** Trường `id` (int), `relevant_docs` (list string), `relevant_chunks` (list object `{"doc_id": "...", "chunk_text": "..."}`).
+3. [ ] **Quy định `doc_id`:** Với VI/ZH là `id` gốc từ BTC; với EN **bắt buộc là mã PMID** của PubMed.
+4. [ ] **Quy định `chunk_text`:** Phải là chuỗi trích xuất nguyên bản từ tài liệu gốc, không tự ý viết lại hay sinh mới.
+5. [ ] **Giới hạn số lần nộp:** Tối đa 10 lần/ngày (Public Phase) và 5 lần tổng cộng (Private Phase).
+
+---
+
+## 👥 Làm Việc Nhóm
+
+Xem quy định chi tiết về phân nhánh Git (`feature/*`, `exp/*`), quy tắc chia sẻ dữ liệu và phân chia vai trò trong đội tại **[TEAM_GUIDE.md](file:///home/thienhb/Workspace/med-doc-retrieval/TEAM_GUIDE.md)**.

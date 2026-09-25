@@ -15,6 +15,7 @@ from src.ingestion.chunker import DocumentChunker
 from src.reranker.bge_reranker import BGEReranker
 from src.retrieval.dense_index import DenseIndex
 from src.retrieval.hybrid import HybridRetriever
+from src.retrieval.qdrant_index import QdrantLocalIndex
 from src.retrieval.sparse_index import SparseIndex
 from src.submission.formatter import SubmissionPackage
 
@@ -66,6 +67,14 @@ class MedicalRetrievalPipeline:
         self.dense_index: DenseIndex | None = None
         self.sparse_index: SparseIndex | None = None
         self.hybrid_retriever: HybridRetriever | None = None
+        self.qdrant_index: QdrantLocalIndex | None = None
+
+        if self.config.retrieval.engine == "qdrant":
+            self.qdrant_index = QdrantLocalIndex(
+                storage_path=self.config.retrieval.qdrant_path,
+                collection_name=self.config.retrieval.collection_name,
+                dimension=1024,
+            )
 
     def build_indices(
         self,
@@ -112,25 +121,37 @@ class MedicalRetrievalPipeline:
                 f.write(json.dumps(c, ensure_ascii=False) + "\n")
         logger.info(f"Saved chunk metadata to {chunks_file}")
 
-        # 3. Dense Indexing
+        # 3. Dense & Sparse Indexing
         logger.info("Computing dense embeddings with BGE-M3...")
         chunk_texts = [c["chunk_text"] for c in all_chunks]
-        chunk_ids = [c["chunk_id"] for c in all_chunks]
         embeddings = self.embedder.encode(chunk_texts, show_progress_bar=True)
 
-        dense_idx = DenseIndex(dimension=embeddings.shape[1])
-        dense_idx.add(embeddings=embeddings, chunk_ids=chunk_ids, chunk_metadata=all_chunks)
-        dense_idx.save(output_indices_dir)
+        if self.config.retrieval.engine == "qdrant":
+            logger.info(f"Indexing {len(all_chunks)} chunks into Qdrant Local Engine...")
+            if self.qdrant_index is None:
+                self.qdrant_index = QdrantLocalIndex(
+                    storage_path=self.config.retrieval.qdrant_path,
+                    collection_name=self.config.retrieval.collection_name,
+                    dimension=embeddings.shape[1],
+                )
+            self.qdrant_index.add_chunks(all_chunks, embeddings)
+            logger.info(
+                f"Qdrant collection '{self.config.retrieval.collection_name}' ready with {self.qdrant_index.count()} chunks."
+            )
+        else:
+            chunk_ids = [c["chunk_id"] for c in all_chunks]
+            dense_idx = DenseIndex(dimension=embeddings.shape[1])
+            dense_idx.add(embeddings=embeddings, chunk_ids=chunk_ids, chunk_metadata=all_chunks)
+            dense_idx.save(output_indices_dir)
 
-        # 4. Sparse Indexing (BM25)
-        sparse_idx = SparseIndex()
-        sparse_idx.build(all_chunks)
-        sparse_idx.save(output_indices_dir)
+            sparse_idx = SparseIndex()
+            sparse_idx.build(all_chunks)
+            sparse_idx.save(output_indices_dir)
 
         logger.info("Indices successfully built and persisted.")
 
     def load_indices(self, indices_dir: str | Path = "data/indices"):
-        """Loads FAISS and BM25 indices from disk."""
+        """Loads FAISS and BM25 indices from disk (fallback when engine == 'faiss')."""
         idx_dir = Path(indices_dir)
         self.dense_index = DenseIndex.load(idx_dir)
         self.sparse_index = SparseIndex.load(idx_dir)
@@ -146,7 +167,7 @@ class MedicalRetrievalPipeline:
 
     def search_query(self, query: str) -> dict[str, Any]:
         """Performs end-to-end retrieval for a single query across VI, ZH, and EN."""
-        if self.hybrid_retriever is None:
+        if self.config.retrieval.engine == "faiss" and self.hybrid_retriever is None:
             try:
                 self.load_indices(self.config.paths.indices_dir)
             except Exception as e:
@@ -159,7 +180,14 @@ class MedicalRetrievalPipeline:
 
         # 2. Local Hybrid Search (VI & ZH from pre-built indices)
         local_candidates: list[dict[str, Any]] = []
-        if self.hybrid_retriever is not None:
+        if self.config.retrieval.engine == "qdrant" and self.qdrant_index is not None:
+            if self.qdrant_index.count() > 0:
+                local_candidates = self.qdrant_index.search(
+                    query_text=query,
+                    query_embedding=q_emb,
+                    top_k=self.config.retrieval.hybrid_top_k,
+                )
+        elif self.hybrid_retriever is not None:
             local_candidates = self.hybrid_retriever.search(
                 query_text=query,
                 query_embedding=q_emb,

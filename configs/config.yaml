@@ -30,9 +30,12 @@ embedding:
   use_fp16: true            # Saves ~50% VRAM (fits in 6GB GPU)
 
 retrieval:
+  engine: "qdrant"          # "qdrant" (embedded local storage) or "faiss"
+  qdrant_path: "data/indices/qdrant_db"
+  collection_name: "medical_chunks"
   dense_top_k: 50
   sparse_top_k: 50
-  fusion_method: "rrf"      # "rrf" (Reciprocal Rank Fusion) or "weighted"
+  fusion_method: "rrf"      # "rrf" (Reciprocal Rank Fusion)
   rrf_k: 60
   dense_weight: 0.6
   sparse_weight: 0.4

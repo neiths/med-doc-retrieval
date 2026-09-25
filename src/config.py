@@ -40,6 +40,9 @@ class EmbeddingConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
+    engine: str = "qdrant"  # "qdrant" (recommended) or "faiss"
+    qdrant_path: Path = Path("data/indices/qdrant_db")
+    collection_name: str = "medical_chunks"
     dense_top_k: int = 50
     sparse_top_k: int = 50
     fusion_method: str = "rrf"  # "rrf" or "weighted"
