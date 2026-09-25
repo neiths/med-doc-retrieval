@@ -8,6 +8,8 @@ from loguru import logger
 from tqdm import tqdm
 
 from src.config import ProjectConfig, load_config
+from src.crawler.pubmed import PubMedClient
+from src.crawler.query_translator import QueryTranslator
 from src.embedding.bge_m3 import BGEM3Embedder
 from src.ingestion.chunker import DocumentChunker
 from src.reranker.bge_reranker import BGEReranker
@@ -43,6 +45,22 @@ class MedicalRetrievalPipeline:
                 batch_size=self.config.reranker.batch_size,
                 device=self.config.reranker.device,
                 use_fp16=self.config.reranker.use_fp16,
+            )
+
+        self.translator = None
+        if self.config.query_translation.enabled:
+            self.translator = QueryTranslator(
+                model_name=self.config.query_translation.model_name,
+                device=self.config.query_translation.device,
+            )
+
+        self.pubmed_client = None
+        if self.config.pubmed.enabled:
+            self.pubmed_client = PubMedClient(
+                email=self.config.crawler.ncbi_email,
+                api_key=self.config.crawler.ncbi_api_key,
+                timeout_seconds=self.config.crawler.timeout_seconds,
+                cache_file=self.config.pubmed.cache_file,
             )
 
         self.dense_index: DenseIndex | None = None
@@ -127,37 +145,74 @@ class MedicalRetrievalPipeline:
         logger.info("Indices successfully loaded into memory.")
 
     def search_query(self, query: str) -> dict[str, Any]:
-        """Performs end-to-end retrieval for a single query."""
+        """Performs end-to-end retrieval for a single query across VI, ZH, and EN."""
         if self.hybrid_retriever is None:
-            self.load_indices(self.config.paths.indices_dir)
+            try:
+                self.load_indices(self.config.paths.indices_dir)
+            except Exception as e:
+                logger.warning(
+                    f"Could not load pre-built local indices ({e}). Proceeding with PubMed only if enabled."
+                )
 
         # 1. Embed query
         q_emb = self.embedder.encode([query])[0]
 
-        # 2. Hybrid search
-        candidates = self.hybrid_retriever.search(
-            query_text=query,
-            query_embedding=q_emb,
-            top_k=self.config.retrieval.hybrid_top_k,
-            dense_top_k=self.config.retrieval.dense_top_k,
-            sparse_top_k=self.config.retrieval.sparse_top_k,
-        )
+        # 2. Local Hybrid Search (VI & ZH from pre-built indices)
+        local_candidates: list[dict[str, Any]] = []
+        if self.hybrid_retriever is not None:
+            local_candidates = self.hybrid_retriever.search(
+                query_text=query,
+                query_embedding=q_emb,
+                top_k=self.config.retrieval.hybrid_top_k,
+                dense_top_k=self.config.retrieval.dense_top_k,
+                sparse_top_k=self.config.retrieval.sparse_top_k,
+            )
 
-        # 3. Rerank
+        # 3. Dynamic English Retrieval via PubMed (EN)
+        pubmed_candidates: list[dict[str, Any]] = []
+        if self.pubmed_client and self.config.pubmed.enabled:
+            if self.translator and self.config.query_translation.enabled:
+                en_query = self.translator.extract_pubmed_keywords(query)
+            else:
+                en_query = query
+
+            logger.info(f"Querying PubMed with extracted keywords: '{en_query}'")
+            articles = self.pubmed_client.search_candidate_articles(
+                query=en_query,
+                top_k=self.config.pubmed.max_candidates_per_query,
+                source=self.config.pubmed.source_api,
+            )
+
+            for art in articles:
+                chunks = self.chunker.chunk_document(
+                    doc_id=str(art["doc_id"]),
+                    text=art["text"],
+                    metadata={"title": art.get("title", ""), "source": art.get("source", "pubmed")},
+                    lang="en",
+                )
+                for c in chunks:
+                    pubmed_candidates.append(c.model_dump())
+
+        # 4. Merge candidates
+        all_candidates = local_candidates + pubmed_candidates
+        if not all_candidates:
+            logger.warning(f"No candidate documents found for query: '{query}'")
+            return {"relevant_docs": [], "relevant_chunks": []}
+
+        # 5. Rerank candidates across all languages using Cross-Encoder
         if self.reranker and self.config.reranker.enabled:
             doc_ids, relevant_chunks = self.reranker.rerank(
                 query=query,
-                candidates=candidates,
+                candidates=all_candidates,
                 top_k_chunks=self.config.reranker.top_k_chunks,
                 top_k_docs=self.config.reranker.top_k_docs,
                 score_threshold=self.config.reranker.score_threshold,
             )
         else:
-            # Fallback to hybrid top candidates
             seen_docs = set()
             doc_ids = []
             relevant_chunks = []
-            for c in candidates[: self.config.reranker.top_k_chunks]:
+            for c in all_candidates[: self.config.reranker.top_k_chunks]:
                 did = str(c["doc_id"])
                 if did not in seen_docs:
                     seen_docs.add(did)

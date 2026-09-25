@@ -47,3 +47,15 @@ reranker:
   top_k_chunks: 10          # Number of chunks to select per query
   top_k_docs: 5             # Maximum distinct documents to select per query
   score_threshold: -5.0     # Minimum cross-encoder logit score filter
+
+query_translation:
+  enabled: true
+  model_name: "Helsinki-NLP/opus-mt-vi-en"
+  device: "auto"
+
+pubmed:
+  enabled: true
+  max_candidates_per_query: 30
+  source_api: "europe_pmc"  # "europe_pmc", "ncbi", or "hybrid"
+  cache_file: "data/processed/pubmed_cache.jsonl"
+

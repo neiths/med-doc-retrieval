@@ -60,6 +60,19 @@ class RerankerConfig(BaseModel):
     score_threshold: float = -5.0
 
 
+class QueryTranslationConfig(BaseModel):
+    enabled: bool = True
+    model_name: str = "Helsinki-NLP/opus-mt-vi-en"
+    device: str = "auto"
+
+
+class PubMedSearchConfig(BaseModel):
+    enabled: bool = True
+    max_candidates_per_query: int = 30
+    source_api: str = "europe_pmc"
+    cache_file: Path = Path("data/processed/pubmed_cache.jsonl")
+
+
 class ProjectConfig(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     crawler: CrawlerConfig = Field(default_factory=CrawlerConfig)
@@ -67,6 +80,8 @@ class ProjectConfig(BaseModel):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     reranker: RerankerConfig = Field(default_factory=RerankerConfig)
+    query_translation: QueryTranslationConfig = Field(default_factory=QueryTranslationConfig)
+    pubmed: PubMedSearchConfig = Field(default_factory=PubMedSearchConfig)
 
 
 def load_config(config_path: str | Path = "configs/config.yaml") -> ProjectConfig:
