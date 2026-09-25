@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Competition data & local artifacts
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/indices/*
+!data/indices/.gitkeep
+outputs/*
+!outputs/.gitkeep
+!outputs/submissions/.gitkeep
+*.zip
+*.tar.gz
+*.bin
+*.pt
+*.safetensors

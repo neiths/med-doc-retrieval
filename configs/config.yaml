@@ -1,0 +1,64 @@
+# Road to AI 2026 (R2AI) - Multilingual Medical Document Retrieval Configuration
+
+paths:
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  indices_dir: "data/indices"
+  outputs_dir: "outputs"
+  submissions_dir: "outputs/submissions"
+
+crawler:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  timeout_seconds: 15
+  max_retries: 3
+  concurrency: 10
+  ncbi_email: "team@r2ai2026.org"
+  ncbi_api_key: null  # Optional NCBI Entrez API key for higher rate limits
+
+chunking:
+  max_chunk_size: 512       # Maximum characters per chunk
+  chunk_overlap: 64         # Overlap characters between consecutive chunks
+  min_chunk_size: 50        # Filter out tiny chunks/noise
+  split_by_sentences: true  # Prefer splitting at sentence boundaries
+
+embedding:
+  model_name: "BAAI/bge-m3"
+  batch_size: 16
+  max_length: 512
+  normalize_embeddings: true
+  device: "auto"            # "cuda", "cpu", or "auto"
+  use_fp16: true            # Saves ~50% VRAM (fits in 6GB GPU)
+
+retrieval:
+  engine: "qdrant"          # "qdrant" (embedded local storage) or "faiss"
+  qdrant_path: "data/indices/qdrant_db"
+  collection_name: "medical_chunks"
+  dense_top_k: 50
+  sparse_top_k: 50
+  fusion_method: "rrf"      # "rrf" (Reciprocal Rank Fusion)
+  rrf_k: 60
+  dense_weight: 0.6
+  sparse_weight: 0.4
+  hybrid_top_k: 30
+
+reranker:
+  enabled: true
+  model_name: "BAAI/bge-reranker-large"
+  batch_size: 16
+  device: "auto"
+  use_fp16: true            # Saves ~50% VRAM
+  top_k_chunks: 10          # Number of chunks to select per query
+  top_k_docs: 5             # Maximum distinct documents to select per query
+  score_threshold: -5.0     # Minimum cross-encoder logit score filter
+
+query_translation:
+  enabled: true
+  model_name: "Helsinki-NLP/opus-mt-vi-en"
+  device: "auto"
+
+pubmed:
+  enabled: true
+  max_candidates_per_query: 30
+  source_api: "europe_pmc"  # "europe_pmc", "ncbi", or "hybrid"
+  cache_file: "data/processed/pubmed_cache.jsonl"
+
