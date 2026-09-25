@@ -7,9 +7,37 @@ from loguru import logger
 
 # Common medical stopwords to strip from translated queries for PubMed search
 PUBMED_STOPWORDS = {
-    "what", "should", "be", "done", "how", "to", "treat", "treatment", "of", "for",
-    "the", "a", "an", "is", "are", "can", "with", "in", "on", "and", "or", "about",
-    "patient", "patients", "causes", "caused", "by", "there", "any", "do", "does",
+    "what",
+    "should",
+    "be",
+    "done",
+    "how",
+    "to",
+    "treat",
+    "treatment",
+    "of",
+    "for",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "can",
+    "with",
+    "in",
+    "on",
+    "and",
+    "or",
+    "about",
+    "patient",
+    "patients",
+    "causes",
+    "caused",
+    "by",
+    "there",
+    "any",
+    "do",
+    "does",
 }
 
 # Domain dictionary mapping common Vietnamese clinical phrases directly to MeSH/English
@@ -50,6 +78,7 @@ class QueryTranslator:
         """Lazy loader for MarianMT model."""
         if self._model is None or self._tokenizer is None:
             from transformers import MarianMTModel, MarianTokenizer
+
             logger.info(f"Loading translation model weights from {self.model_name}...")
             self._tokenizer = MarianTokenizer.from_pretrained(self.model_name)
             dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -72,7 +101,9 @@ class QueryTranslator:
             translated = self._tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)[0]
             return translated.strip()
         except Exception as e:
-            logger.warning(f"Translation failed for '{vi_text}': {e}. Falling back to lexicon extraction.")
+            logger.warning(
+                f"Translation failed for '{vi_text}': {e}. Falling back to lexicon extraction."
+            )
             return ""
 
     def extract_pubmed_keywords(self, vi_query: str) -> str:
