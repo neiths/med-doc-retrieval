@@ -61,6 +61,6 @@ query_translation:
 pubmed:
   enabled: true
   max_candidates_per_query: 30
-  source_api: "europe_pmc"  # "europe_pmc", "ncbi", or "hybrid"
+  source_api: "europe_pmc"  # "europe_pmc", "pubtator", "ncbi", or "hybrid"
   cache_file: "data/processed/pubmed_cache.jsonl"
 
