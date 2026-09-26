@@ -55,6 +55,8 @@ query_translation:
   enabled: true
   model_name: "Helsinki-NLP/opus-mt-vi-en"
   device: "auto"
+  lexicon_path: "data/lexicon/medical_terms.json"
+  stopwords_path: "configs/pubmed_stopwords.txt"
 
 pubmed:
   enabled: true

@@ -1,6 +1,6 @@
-"""Query translation and biomedical keyword extraction from Vietnamese to English."""
-
+import json
 import re
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -57,6 +57,40 @@ VI_EN_MEDICAL_LEXICON = {
 }
 
 
+def load_lexicon(path: Path | str) -> dict[str, str]:
+    """Loads bilingual medical lexicon from a JSON file."""
+    path = Path(path)
+    if not path.exists():
+        logger.warning(f"Lexicon file {path} not found. Using defaults.")
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {k.strip().lower(): v.strip() for k, v in data.items() if k.strip()}
+    except Exception as e:
+        logger.error(f"Failed to load lexicon from {path}: {e}")
+        return {}
+
+
+def load_stopwords(path: Path | str) -> set[str]:
+    """Loads stopword list from a text file (one word/phrase per line)."""
+    path = Path(path)
+    if not path.exists():
+        logger.warning(f"Stopwords file {path} not found. Using defaults.")
+        return set()
+    stopwords = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    stopwords.add(line.lower())
+        return stopwords
+    except Exception as e:
+        logger.error(f"Failed to load stopwords from {path}: {e}")
+        return set()
+
+
 class QueryTranslator:
     """Translates Vietnamese queries to English and extracts biomedical keywords for PubMed."""
 
@@ -64,6 +98,8 @@ class QueryTranslator:
         self,
         model_name: str = "Helsinki-NLP/opus-mt-vi-en",
         device: str = "auto",
+        lexicon_path: Path | str | None = "data/lexicon/medical_terms.json",
+        stopwords_path: Path | str | None = "configs/pubmed_stopwords.txt",
     ):
         self.model_name = model_name
         if device == "auto":
@@ -73,6 +109,24 @@ class QueryTranslator:
 
         self._tokenizer = None
         self._model = None
+
+        # Initialize base lexicon and stopwords
+        self.lexicon: dict[str, str] = dict(VI_EN_MEDICAL_LEXICON)
+        self.stopwords: set[str] = set(PUBMED_STOPWORDS)
+
+        if lexicon_path:
+            loaded_lexicon = load_lexicon(lexicon_path)
+            self.lexicon.update(loaded_lexicon)
+            logger.debug(
+                f"Loaded {len(loaded_lexicon)} terms from {lexicon_path}. Total: {len(self.lexicon)}"
+            )
+
+        if stopwords_path:
+            loaded_stopwords = load_stopwords(stopwords_path)
+            self.stopwords.update(loaded_stopwords)
+            logger.debug(
+                f"Loaded {len(loaded_stopwords)} stopwords from {stopwords_path}. Total: {len(self.stopwords)}"
+            )
 
     def _load_model(self):
         """Lazy loader for MarianMT model."""
@@ -110,21 +164,23 @@ class QueryTranslator:
         """Extracts concise English keywords suitable for PubMed ESearch / Europe PMC API.
 
         Combines:
-        1. Direct domain lexicon match.
+        1. Direct domain lexicon match (sorted by length descending).
         2. MarianMT translation with stopword filtering.
         """
         lexicon_terms = []
         vi_lower = vi_query.lower()
-        for vi_phrase, en_phrase in VI_EN_MEDICAL_LEXICON.items():
+        # Sort phrases by length descending to match compound terms first
+        sorted_phrases = sorted(self.lexicon.keys(), key=len, reverse=True)
+        for vi_phrase in sorted_phrases:
             if vi_phrase in vi_lower:
-                lexicon_terms.append(en_phrase)
+                lexicon_terms.append(self.lexicon[vi_phrase])
 
         translated = self.translate_to_english(vi_query)
         keywords = []
 
         if translated:
             words = re.findall(r"[a-zA-Z]+", translated.lower())
-            filtered = [w for w in words if w not in PUBMED_STOPWORDS and len(w) > 2]
+            filtered = [w for w in words if w not in self.stopwords and len(w) > 2]
             keywords.extend(filtered)
 
         # Merge lexicon terms and translated keywords (preserving order, removing duplicates)
