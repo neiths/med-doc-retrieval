@@ -58,7 +58,9 @@ class QdrantLocalIndex:
         """Creates collection with named dense and sparse vectors if not exists."""
         collections = [c.name for c in self.client.get_collections().collections]
         if self.collection_name not in collections:
-            logger.info(f"Creating Qdrant collection '{self.collection_name}' (dim={self.dimension})")
+            logger.info(
+                f"Creating Qdrant collection '{self.collection_name}' (dim={self.dimension})"
+            )
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config={
@@ -67,9 +69,7 @@ class QdrantLocalIndex:
                         distance=models.Distance.COSINE,
                     )
                 },
-                sparse_vectors_config={
-                    "sparse": models.SparseVectorParams()
-                },
+                sparse_vectors_config={"sparse": models.SparseVectorParams()},
             )
 
     def add_chunks(

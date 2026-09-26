@@ -84,7 +84,9 @@ class MedicalRetrievalPipeline:
         """Chunks articles, encodes them, and builds both FAISS and BM25 indices."""
         art_path = Path(articles_file)
         if not art_path.exists():
-            raise FileNotFoundError(f"Articles file {art_path} not found. Please crawl or collect data first.")
+            raise FileNotFoundError(
+                f"Articles file {art_path} not found. Please crawl or collect data first."
+            )
 
         # 1. Load articles
         logger.info(f"Loading articles from {art_path}...")
@@ -268,11 +270,13 @@ class MedicalRetrievalPipeline:
             qid = int(q["id"])
             query_text = q["query"]
             result = self.search_query(query_text)
-            predictions.append({
-                "id": qid,
-                "relevant_docs": result["relevant_docs"],
-                "relevant_chunks": result["relevant_chunks"],
-            })
+            predictions.append(
+                {
+                    "id": qid,
+                    "relevant_docs": result["relevant_docs"],
+                    "relevant_chunks": result["relevant_chunks"],
+                }
+            )
 
         return predictions
 

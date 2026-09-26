@@ -25,13 +25,16 @@ class BGEReranker:
         else:
             self.device = device
 
-        logger.info(f"Initializing BGEReranker with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}")
+        logger.info(
+            f"Initializing BGEReranker with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}"
+        )
         self._tokenizer = None
         self._model = None
 
     def _load_model(self):
         if self._model is None or self._tokenizer is None:
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
             logger.info(f"Loading reranker model weights from {self.model_name}...")
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             dtype = torch.float16 if (self.use_fp16 and self.device == "cuda") else torch.float32
@@ -114,8 +117,7 @@ class BGEReranker:
                 break
 
         formatted_chunks = [
-            {"doc_id": str(c["doc_id"]), "chunk_text": c["chunk_text"]}
-            for c in selected_chunks
+            {"doc_id": str(c["doc_id"]), "chunk_text": c["chunk_text"]} for c in selected_chunks
         ]
 
         return doc_ids, formatted_chunks

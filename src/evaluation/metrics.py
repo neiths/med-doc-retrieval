@@ -12,9 +12,11 @@ from typing import Any
 import numpy as np
 
 
-def compute_prf(retrieved: set[Any], relevant: set[Any], beta: float = 2.0) -> tuple[float, float, float]:
+def compute_prf(
+    retrieved: set[Any], relevant: set[Any], beta: float = 2.0
+) -> tuple[float, float, float]:
     """Computes Precision, Recall, and F_beta score between retrieved and ground-truth sets.
-    
+
     Args:
         retrieved: Set of retrieved identifiers/chunks.
         relevant: Set of ground-truth relevant identifiers/chunks.
@@ -32,7 +34,7 @@ def compute_prf(retrieved: set[Any], relevant: set[Any], beta: float = 2.0) -> t
     precision = len(intersection) / len(retrieved)
     recall = len(intersection) / len(relevant)
 
-    beta_sq = beta ** 2
+    beta_sq = beta**2
     denominator = (beta_sq * precision) + recall
     if denominator == 0:
         f_score = 0.0
@@ -46,7 +48,7 @@ def evaluate_query(
     pred_docs: list[str],
     gt_docs: list[str],
     pred_chunks: list[tuple[str, str]],  # (doc_id, chunk_text)
-    gt_chunks: list[tuple[str, str]],    # (doc_id, chunk_text)
+    gt_chunks: list[tuple[str, str]],  # (doc_id, chunk_text)
 ) -> dict[str, float]:
     """Evaluates a single query at document and chunk levels."""
     # Document level
@@ -82,7 +84,7 @@ def evaluate_predictions(
         Dict containing macro averages and overall combined score.
     """
     gt_map = {item["id"]: item for item in ground_truth}
-    
+
     doc_f2s = []
     chunk_f2s = []
     doc_precisions = []

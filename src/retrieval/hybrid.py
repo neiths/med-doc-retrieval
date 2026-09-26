@@ -87,12 +87,20 @@ class HybridRetriever:
             range_s = max(max_s - min_s, 1e-6)
 
             for cid in all_chunk_ids:
-                d_norm = (dense_scores.get(cid, min_d) - min_d) / range_d if cid in dense_scores else 0.0
-                s_norm = (sparse_scores.get(cid, min_s) - min_s) / range_s if cid in sparse_scores else 0.0
+                d_norm = (
+                    (dense_scores.get(cid, min_d) - min_d) / range_d if cid in dense_scores else 0.0
+                )
+                s_norm = (
+                    (sparse_scores.get(cid, min_s) - min_s) / range_s
+                    if cid in sparse_scores
+                    else 0.0
+                )
                 fused_scores[cid] = (self.dense_weight * d_norm) + (self.sparse_weight * s_norm)
 
         # Sort candidate chunks
-        sorted_chunks = sorted(all_chunk_ids, key=lambda cid: fused_scores[cid], reverse=True)[:top_k]
+        sorted_chunks = sorted(all_chunk_ids, key=lambda cid: fused_scores[cid], reverse=True)[
+            :top_k
+        ]
 
         candidates = []
         for cid in sorted_chunks:

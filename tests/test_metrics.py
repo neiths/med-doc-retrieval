@@ -15,7 +15,7 @@ def test_compute_prf_basic():
     p, r, f2 = compute_prf(retrieved, relevant, beta=2.0)
     assert pytest.approx(p, 0.001) == 2 / 3
     assert pytest.approx(r, 0.001) == 0.5
-    assert pytest.approx(f2, 0.001) == (5 * (2/3) * 0.5) / (4 * (2/3) + 0.5)
+    assert pytest.approx(f2, 0.001) == (5 * (2 / 3) * 0.5) / (4 * (2 / 3) + 0.5)
 
 
 def test_compute_prf_edge_cases():

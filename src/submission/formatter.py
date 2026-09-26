@@ -10,13 +10,17 @@ from pydantic import BaseModel, Field
 
 
 class ChunkSubmission(BaseModel):
-    doc_id: str = Field(..., description="Original document ID (Vietnamese/Chinese BTC ID or English PMID)")
+    doc_id: str = Field(
+        ..., description="Original document ID (Vietnamese/Chinese BTC ID or English PMID)"
+    )
     chunk_text: str = Field(..., description="Exact extracted chunk text from the source document")
 
 
 class QuerySubmission(BaseModel):
     id: int = Field(..., description="Query integer ID")
-    relevant_docs: list[str] = Field(default_factory=list, description="List of predicted document IDs")
+    relevant_docs: list[str] = Field(
+        default_factory=list, description="List of predicted document IDs"
+    )
     relevant_chunks: list[ChunkSubmission] = Field(
         default_factory=list, description="List of predicted chunk objects"
     )
