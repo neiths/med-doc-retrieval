@@ -208,14 +208,32 @@ Ví dụ:
 
 Các đội tự thực hiện việc thu thập nội dung từ các URL được cung cấp, tiền xử lý, phân đoạn và xây dựng cơ sở tri thức phục vụ truy hồi.
 
-Đối với dữ liệu tiếng Anh, Ban Tổ chức không cung cấp sẵn danh sách tài liệu. Các đội chủ động tìm kiếm các bài báo y sinh từ PubMed, có thể sử dụng các API như NCBI Entrez E-utilities hoặc Europe PMC để thu thập các tài liệu ứng viên, sau đó tự xây dựng phương pháp lọc và reranking.
+Đối với dữ liệu tiếng Anh, Ban Tổ chức không cung cấp sẵn danh sách tài liệu. Các đội chủ động tìm kiếm các bài báo y sinh từ PubMed, có thể sử dụng các API như NCBI Entrez E-utilities, Europe PMC hoặc PubTator 3.0 để thu thập các tài liệu ứng viên, sau đó tự xây dựng phương pháp lọc và reranking.
 
-Ví dụ: với truy vấn kidney stone urinary obstruction, có thể sử dụng NCBI ESearch để lấy danh sách PMID của các bài PubMed phù hợp:
-
+Ví dụ: với truy vấn `kidney stone urinary obstruction`:
+- Sử dụng NCBI ESearch:
+```text
 https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=kidney+stone+urinary+obstruction&retmax=100&retmode=json
-
-Hoặc sử dụng Europe PMC:
-
+```
+- Hoặc sử dụng Europe PMC:
+```text
 https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=kidney%20stone%20urinary%20obstruction&format=json&pageSize=100
+```
+- Hoặc sử dụng PubTator 3.0 API:
+```text
+https://www.ncbi.nlm.nih.gov/research/pubtator3-api/search/?text=kidney+stone+urinary+obstruction&limit=100
+```
+Và tải metadata / abstract kèm chú giải thực thể y sinh dạng BiocJSON qua:
+```text
+https://www.ncbi.nlm.nih.gov/research/pubtator3-api/publications/export/biocjson?pmids=PMID1,PMID2
+```
 
 Kết quả tìm kiếm có thể được sử dụng làm tập tài liệu ứng viên để đội thi tiếp tục tải metadata, abstract hoặc nội dung phù hợp và thực hiện reranking theo phương pháp của mình.
+
+---
+
+### 📢 Cập nhật thông báo từ BTC (26/09/2026)
+- **Hình thức cung cấp dữ liệu**: BTC **không cung cấp sẵn tập chunk đã xử lý**.
+  - **Tiếng Việt & Tiếng Trung**: Cung cấp danh sách URL bài viết y khoa. Đội thi chủ động cào văn bản, tiền xử lý, phân đoạn và lập chỉ mục.
+  - **Tiếng Anh**: Không cung cấp danh sách tài liệu. Phạm vi giới hạn ở PubMed. Đội thi chủ động tìm kiếm qua các API: NCBI Entrez, Europe PMC, hoặc PubTator 3.0.
+- **Ngày phát hành chính thức**: Danh sách nguồn dữ liệu và bộ câu hỏi chính thức sẽ được BTC cung cấp vào ngày **01/10/2026**.

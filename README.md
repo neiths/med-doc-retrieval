@@ -25,7 +25,7 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 ┌───────────────────────────────────┐             ┌───────────────────────────────────┐
 │ Raw Data (URLs BTC cấp)           │             │ Query Translator (MarianMT)       │
 │ └──> Ingestion & Exact Chunking   │             │ └──> Medical Term Extraction (EN) │
-│ └──> BGE-M3 Dense & Sparse Encode │             │ └──> PubMed / Europe PMC API      │
+│ └──> BGE-M3 Dense & Sparse Encode │             │ └──> PubMed / PubTator / Europe PMC│
 │ └──> Qdrant Local Engine Storage  │             │ └──> Fetch Abstracts & On-the-fly │
 └─────────────────┬─────────────────┘             └─────────────────┬─────────────────┘
                   │                                                 │
@@ -60,8 +60,8 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 | **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense + Sparse) & RRF trực tiếp ở tầng engine. |
 | **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số, phát hành trước 06/2026. |
 | **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và chunk đa ngôn ngữ. |
-| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` + MeSH Lexicon | Mô hình dịch mở ~289MB, trích xuất từ khóa y khoa tiếng Anh phục vụ truy vấn PubMed. |
-| **External Medical API** | Europe PMC REST API & NCBI Entrez E-utilities | Tìm kiếm bài báo PubMed theo từ khóa và lưu cache tự động tại `pubmed_cache.jsonl`. |
+| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` + Bilingual Lexicon | Mô hình dịch mở ~289MB kết hợp `data/lexicon/medical_terms.json` và `configs/pubmed_stopwords.txt`. |
+| **External Medical API** | PubTator 3.0, Europe PMC & NCBI Entrez | Tìm kiếm bài báo PubMed theo từ khóa, tải BiocJSON/XML và lưu cache tự động tại `pubmed_cache.jsonl`. |
 | **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. |
 
 ---
@@ -71,8 +71,11 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 ```text
 med-doc-retrieval/
 ├── configs/
-│   └── config.yaml             # Cấu hình siêu tham số (Qdrant, FP16, chunk size, top-k, weights)
-├── data/                       # Đã cấu hình .gitignore (bảo vệ an toàn dữ liệu)
+│   ├── config.yaml             # Cấu hình siêu tham số (Qdrant, FP16, chunk size, top-k, weights)
+│   └── pubmed_stopwords.txt    # Danh sách stopwords / filler words khi tìm kiếm y sinh PubMed
+├── data/
+│   ├── lexicon/
+│   │   └── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (>100 thuật ngữ, lưu trên Git)
 │   ├── raw/                    # Dữ liệu thô từ BTC (urls.jsonl, queries.jsonl)
 │   ├── processed/              # Chứa chunks.jsonl, pubmed_cache.jsonl
 │   └── indices/                # Qdrant Local Engine database (data/indices/qdrant_db)
@@ -80,7 +83,7 @@ med-doc-retrieval/
 │   ├── config.py               # Pydantic schema quản lý cấu hình hệ thống
 │   ├── crawler/                # Thu thập dữ liệu đa ngôn ngữ
 │   │   ├── url_scraper.py      # Async scraper cho URLs bài viết VI và ZH (Trafilatura)
-│   │   ├── pubmed.py           # Client tra cứu PubMed / Europe PMC (có disk cache)
+│   │   ├── pubmed.py           # Client tra cứu PubTator 3.0 / Europe PMC / NCBI (có disk cache)
 │   │   └── query_translator.py # Bộ dịch MarianMT & trích xuất từ khóa y khoa VI -> EN
 │   ├── ingestion/              # Tiền xử lý & phân đoạn
 │   │   ├── cleaner.py          # Chuẩn hóa Unicode NFC & lọc ngôn ngữ

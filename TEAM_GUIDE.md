@@ -50,17 +50,18 @@ cp .env.example .env
 > Tuyệt đối **KHÔNG commit file dữ liệu nặng** (`.jsonl`, `.faiss`, `.pkl`, `.zip`, `.pt`, `.safetensors`) lên Git repo. Thư mục `data/` và `outputs/` đã được cấu hình trong `.gitignore`.
 
 ### Cấu trúc dữ liệu cục bộ:
+- `data/lexicon/medical_terms.json`: Từ điển y khoa song ngữ VI-EN (hơn 100+ thuật ngữ chuyên khoa, **được lưu trên Git**).
+- `configs/pubmed_stopwords.txt`: Danh sách stopwords / filler words cho truy vấn y sinh PubMed (**được lưu trên Git**).
 - `data/raw/`: Chứa file ban đầu từ BTC:
   - `urls_vi.jsonl`, `urls_zh.jsonl` (Danh sách URL bài viết VI và ZH)
   - `queries_test.jsonl` (Tập câu hỏi kiểm thử tiếng Việt)
 - `data/processed/`:
-  - `crawled_articles.jsonl`: Kết quả cào văn bản sạch từ URL
-  - `pubmed_articles.jsonl`: Dữ liệu tiếng Anh tải từ PubMed/Europe PMC
+  - `crawled_articles.jsonl`: Kết quả cào văn bản sạch từ URL (Trafilatura)
+  - `pubmed_cache.jsonl`: Cache các bài báo tiếng Anh tải từ Europe PMC / PubTator 3.0 / NCBI
   - `all_articles.jsonl`: Dữ liệu gộp tất cả ngôn ngữ
-  - `chunks.jsonl`: Toàn bộ các chunk kèm metadata
+  - `chunks.jsonl`: Toàn bộ các chunk kèm metadata (doc_id, chunk_text, lang)
 - `data/indices/`:
-  - `dense_index.faiss` + `dense_metadata.json`: FAISS vector index
-  - `bm25_index.pkl`: BM25 sparse index
+  - `qdrant_db/`: Cơ sở dữ liệu vector Qdrant Local Embedded (lưu cả Dense BGE-M3 + Neural Sparse vectors)
 
 ---
 
@@ -73,12 +74,12 @@ Mọi thao tác đều có thể chạy qua CLI `python main.py --help`:
 python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 15
 ```
 
-### 2. Thu thập dữ liệu tiếng Anh từ PubMed
+### 2. Thu thập dữ liệu tiếng Anh từ PubMed / PubTator 3.0
 ```bash
 python main.py fetch-pubmed --query "kidney stone treatment" --max-results 100 --output data/processed/pubmed_articles.jsonl
 ```
 
-### 3. Gộp dữ liệu & Xây dựng Index (Chunking -> Embedding -> FAISS + BM25)
+### 3. Gộp dữ liệu & Lập Chỉ Mục vào Qdrant (Chunking -> Embedding BGE-M3 -> Qdrant Local)
 Gộp các file bài báo vào `data/processed/all_articles.jsonl`, sau đó chạy:
 ```bash
 python main.py build-index --input data/processed/all_articles.jsonl --output-dir data/indices/
@@ -102,34 +103,67 @@ File ZIP chuẩn sẽ được tạo tại `outputs/submissions/submission.zip` 
 
 ---
 
-## 🧪 4. Quy chuẩn Thử nghiệm & Siêu tham số (Hyperparameters)
+## 📅 4. Kịch bản Ngày 01/10/2026 (Game Day Runbook)
 
-Mọi siêu tham số được đặt tại `configs/config.yaml`:
-- `chunking`: `max_chunk_size` (mặc định 512), `chunk_overlap` (mặc định 64)
-- `retrieval`:
-  - `dense_top_k`, `sparse_top_k` (mặc định 50)
-  - `fusion_method`: `"rrf"` hoặc `"weighted"`
-  - `rrf_k`: hệ số làm mượt (mặc định 60)
-  - `dense_weight`, `sparse_weight`: tỷ trọng kết hợp
-- `reranker`:
-  - `model_name`: `BAAI/bge-reranker-large` hoặc `BAAI/bge-reranker-v2-m3`
-  - `top_k_chunks`: số đoạn văn bản chọn lọc cho bài nộp
-  - `top_k_docs`: số tài liệu chọn lọc cho bài nộp
+Vào ngày **01/10/2026**, BTC sẽ công bố danh sách URL bài viết và bộ câu hỏi kiểm thử:
 
-**Quy tắc:** Khi thử nghiệm phương pháp mới (prompt expansion, chunking strategy, re-ranker threshold), hãy tạo nhánh Git riêng hoặc cấu hình file yaml mới (ví dụ `configs/exp1_chunk256.yaml`).
+1. **Nhận dữ liệu thô từ BTC**:
+   - Tải file URLs tiếng Việt và tiếng Trung vào `data/raw/urls_vi.jsonl` và `data/raw/urls_zh.jsonl`.
+   - Tải tập câu hỏi truy vấn vào `data/raw/queries_test.jsonl`.
+2. **Cào dữ liệu (Crawl Phase)**:
+   ```bash
+   python main.py crawl-urls --input data/raw/urls_vi.jsonl --output data/processed/vi_articles.jsonl
+   python main.py crawl-urls --input data/raw/urls_zh.jsonl --output data/processed/zh_articles.jsonl
+   ```
+3. **Lập chỉ mục Qdrant (Indexing Phase)**:
+   ```bash
+   cat data/processed/vi_articles.jsonl data/processed/zh_articles.jsonl > data/processed/all_articles.jsonl
+   python main.py build-index --input data/processed/all_articles.jsonl
+   ```
+4. **Chạy Pipeline Suy luận Đa ngôn ngữ (Inference Phase)**:
+   - Pipeline tự động dịch câu hỏi sang tiếng Anh bằng `opus-mt-vi-en` + `medical_terms.json`.
+   - Tìm kiếm bài báo PubMed / PubTator 3.0 / Europe PMC.
+   - Tìm kiếm Qdrant Hybrid Search (Dense + Sparse + RRF).
+   - Rerank toàn bộ bằng `bge-reranker-large` (FP16).
+   ```bash
+   python main.py generate-submission --queries data/raw/queries_test.jsonl --name submission_v1.json
+   ```
+5. **Kiểm tra và nộp bài (Submit Phase)**:
+   - Tải file `outputs/submissions/submission_v1.zip` lên mục *My Submissions* tại [AIGuru Leaderboard](http://leaderboard.aiguru.com.vn/).
 
 ---
 
-## 🌿 5. Quy ước Git & Branching
+## 🧪 5. Quy chuẩn Thử nghiệm & Siêu tham số (Hyperparameters)
+
+Mọi siêu tham số được đặt tại `configs/config.yaml`:
+- `query_translation`:
+  - `lexicon_path`: `data/lexicon/medical_terms.json` (từ điển mở rộng)
+  - `stopwords_path`: `configs/pubmed_stopwords.txt` (loại bỏ từ nối)
+- `pubmed`:
+  - `source_api`: `"europe_pmc"`, `"pubtator"`, `"ncbi"`, hoặc `"hybrid"`
+  - `max_candidates_per_query`: 30
+- `retrieval`:
+  - `engine`: `"qdrant"`
+  - `dense_top_k`: 50, `sparse_top_k`: 50, `hybrid_top_k`: 30
+  - `fusion_method`: `"rrf"` (hệ số `rrf_k: 60`)
+- `reranker`:
+  - `model_name`: `BAAI/bge-reranker-large` (FP16)
+  - `top_k_chunks`: 10
+  - `top_k_docs`: 5
+  - `score_threshold`: -5.0
+
+---
+
+## 🌿 6. Quy ước Git & Branching
 
 - **`main`**: Nhánh ổn định, luôn chạy được, dùng để nộp bài.
-- **`feature/<ten-tinh-nang>`**: Phát triển tính năng mới (ví dụ: `feature/query-expansion`, `feature/pubmed-enrichment`).
+- **`feature/<ten-tinh-nang>`**: Phát triển tính năng mới (ví dụ: `feature/pubtator-integration`, `feature/query-expansion`).
 - **`exp/<ten-thu-nghiem>`**: Thử nghiệm model, tuning metric (ví dụ: `exp/bge-reranker-v2`, `exp/rrf-tuning`).
 - **Pull Request (PR)**: Tạo PR vào `main` kèm log kết quả metric F2 nếu có cải thiện.
 
 ---
 
-## 📋 6. Checklist trước khi nộp bài lên Dashboard
+## 📋 7. Checklist trước khi nộp bài lên Dashboard
 1. [ ] Kiểm tra định dạng JSON: `id` (int), `relevant_docs` (list string), `relevant_chunks` (list object `{"doc_id": "...", "chunk_text": "..."}`).
 2. [ ] `chunk_text` là đoạn trích xuất **chính xác** từ văn bản gốc (không sinh mới / không bịa đặt).
 3. [ ] `doc_id` tiếng Anh giữ nguyên mã **PMID**.
