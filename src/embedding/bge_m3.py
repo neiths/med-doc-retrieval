@@ -1,6 +1,5 @@
 """Multilingual dense embedding generator using BAAI/bge-m3."""
 
-
 import numpy as np
 import torch
 from loguru import logger
@@ -29,7 +28,9 @@ class BGEM3Embedder:
         else:
             self.device = device
 
-        logger.info(f"Initializing BGEM3Embedder with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}")
+        logger.info(
+            f"Initializing BGEM3Embedder with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}"
+        )
         self._model = None
 
     @property
@@ -37,6 +38,7 @@ class BGEM3Embedder:
         """Lazy loader for SentenceTransformer / FlagEmbedding model."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
+
             logger.info(f"Loading embedding model weights from {self.model_name}...")
             model_kwargs = {}
             if self.use_fp16 and self.device == "cuda":

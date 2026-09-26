@@ -67,6 +67,8 @@ class QueryTranslationConfig(BaseModel):
     enabled: bool = True
     model_name: str = "Helsinki-NLP/opus-mt-vi-en"
     device: str = "auto"
+    lexicon_path: Path | None = Path("data/lexicon/medical_terms.json")
+    stopwords_path: Path | None = Path("configs/pubmed_stopwords.txt")
 
 
 class PubMedSearchConfig(BaseModel):

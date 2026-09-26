@@ -39,10 +39,13 @@ def test_qdrant_local_index(tmp_path: Path):
         },
     ]
 
-    embeddings = np.array([
-        [0.1, 0.2, 0.3, 0.4],
-        [0.4, 0.3, 0.2, 0.1],
-    ], dtype=np.float32)
+    embeddings = np.array(
+        [
+            [0.1, 0.2, 0.3, 0.4],
+            [0.4, 0.3, 0.2, 0.1],
+        ],
+        dtype=np.float32,
+    )
 
     index.add_chunks(chunks, embeddings)
     assert index.count() == 2
