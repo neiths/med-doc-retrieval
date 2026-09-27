@@ -93,7 +93,7 @@ class BGEReranker:
         if not candidates:
             return [], []
 
-        pairs = [(query, cand["chunk_text"]) for cand in candidates]
+        pairs = [(query, cand.get("contextual_text") or cand["chunk_text"]) for cand in candidates]
         scores = self.compute_scores(pairs)
 
         for cand, score in zip(candidates, scores):
