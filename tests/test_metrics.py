@@ -64,3 +64,49 @@ def test_evaluate_predictions_macro():
     assert results["macro_chunk_f2"] == 1.0
     assert 0.0 < results["macro_doc_f2"] <= 1.0
     assert "combined_f2" in results
+
+
+def test_chunk_containment_and_overlap():
+    # Predicted chunk contains the gold sentence
+    pred_chunks = [("doc1", "Sentence A. Gold sentence here. Sentence B.")]
+    gt_chunks = [("doc1", "Gold sentence here.")]
+
+    # Overlap / containment match
+    res_overlap = evaluate_predictions(
+        [
+            {
+                "id": 1,
+                "relevant_docs": ["doc1"],
+                "relevant_chunks": [{"doc_id": "doc1", "chunk_text": pred_chunks[0][1]}],
+            }
+        ],
+        [
+            {
+                "id": 1,
+                "relevant_docs": ["doc1"],
+                "relevant_chunks": [{"doc_id": "doc1", "chunk_text": gt_chunks[0][1]}],
+            }
+        ],
+        chunk_match_mode="overlap",
+    )
+    assert res_overlap["macro_chunk_f2"] == 1.0
+
+    # Exact match mode requires 100% string equality
+    exact_res = evaluate_predictions(
+        [
+            {
+                "id": 1,
+                "relevant_docs": ["doc1"],
+                "relevant_chunks": [{"doc_id": "doc1", "chunk_text": pred_chunks[0][1]}],
+            }
+        ],
+        [
+            {
+                "id": 1,
+                "relevant_docs": ["doc1"],
+                "relevant_chunks": [{"doc_id": "doc1", "chunk_text": gt_chunks[0][1]}],
+            }
+        ],
+        chunk_match_mode="exact",
+    )
+    assert exact_res["macro_chunk_f2"] == 0.0

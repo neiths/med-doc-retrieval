@@ -17,12 +17,20 @@ class ArticleScraper:
 
     def __init__(
         self,
-        user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        user_agent: str = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
         timeout_seconds: int = 15,
         max_retries: int = 3,
         concurrency: int = 10,
     ):
-        self.headers = {"User-Agent": user_agent}
+        self.headers = {
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,zh-CN;q=0.8,zh;q=0.7,en-US;q=0.6,en;q=0.5",
+            "Upgrade-Insecure-Requests": "1",
+        }
         self.timeout = httpx.Timeout(timeout_seconds)
         self.max_retries = max_retries
         self.semaphore = asyncio.Semaphore(concurrency)
@@ -88,12 +96,21 @@ class ArticleScraper:
                 return {"doc_id": doc_id, "url": url, "title": "", "text": "", "status": "failed"}
 
             content = self.extract_text(html, fallback_url=url)
+            raw_text = content.get("text", "")
+
+            # Normalize text and detect language
+            from src.ingestion.cleaner import detect_language, normalize_text
+
+            cleaned_text = normalize_text(raw_text) if raw_text else ""
+            lang = detect_language(cleaned_text) if cleaned_text else "unknown"
+
             return {
                 "doc_id": doc_id,
                 "url": url,
                 "title": content.get("title", ""),
-                "text": content.get("text", ""),
-                "status": "success" if content.get("text") else "empty",
+                "text": cleaned_text,
+                "lang": lang,
+                "status": "success" if cleaned_text else "empty",
             }
 
     async def scrape_urls_jsonl(
