@@ -18,9 +18,9 @@ def get_vram_info() -> dict[str, float]:
     if not torch.cuda.is_available():
         return {"allocated": 0.0, "reserved": 0.0, "total": 0.0, "free": 0.0}
 
-    allocated = torch.cuda.memory_allocated() / (1024 ** 2)
-    reserved = torch.cuda.memory_reserved() / (1024 ** 2)
-    total = torch.cuda.get_device_properties(0).total_memory / (1024 ** 2)
+    allocated = torch.cuda.memory_allocated() / (1024**2)
+    reserved = torch.cuda.memory_reserved() / (1024**2)
+    total = torch.cuda.get_device_properties(0).total_memory / (1024**2)
     free = total - reserved
     return {"allocated": allocated, "reserved": reserved, "total": total, "free": free}
 
@@ -36,9 +36,11 @@ def run_benchmark():
     initial_vram = get_vram_info()
     console.print(f"Device: [bold green]{device_name}[/bold green]")
     console.print(
-        f"Total VRAM: [bold]{initial_vram['total']:.1f} MB[/bold] (~{initial_vram['total']/1024:.2f} GB)"
+        f"Total VRAM: [bold]{initial_vram['total']:.1f} MB[/bold] (~{initial_vram['total'] / 1024:.2f} GB)"
     )
-    console.print(f"Initial Allocated: {initial_vram['allocated']:.1f} MB | Reserved: {initial_vram['reserved']:.1f} MB\n")
+    console.print(
+        f"Initial Allocated: {initial_vram['allocated']:.1f} MB | Reserved: {initial_vram['reserved']:.1f} MB\n"
+    )
 
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.empty_cache()
@@ -59,7 +61,9 @@ def run_benchmark():
 
     mem_after_emb_load = get_vram_info()
     console.print(f"  • Load time: {t_load_emb:.2f}s")
-    console.print(f"  • VRAM after loading BGE-M3: [cyan]{mem_after_emb_load['allocated']:.1f} MB[/cyan] (Reserved: {mem_after_emb_load['reserved']:.1f} MB)")
+    console.print(
+        f"  • VRAM after loading BGE-M3: [cyan]{mem_after_emb_load['allocated']:.1f} MB[/cyan] (Reserved: {mem_after_emb_load['reserved']:.1f} MB)"
+    )
 
     # Sample multilingual texts (VI, EN, ZH)
     test_texts = [
@@ -74,16 +78,22 @@ def run_benchmark():
     t0 = time.perf_counter()
     embeddings = embedder.encode(test_texts, show_progress_bar=False)
     t_infer_emb = time.perf_counter() - t0
-    peak_emb_vram = torch.cuda.max_memory_allocated() / (1024 ** 2)
+    peak_emb_vram = torch.cuda.max_memory_allocated() / (1024**2)
 
-    console.print(f"  • Encoded {len(test_texts)} sentences in {t_infer_emb:.3f}s ({len(test_texts)/t_infer_emb:.1f} sent/s)")
+    console.print(
+        f"  • Encoded {len(test_texts)} sentences in {t_infer_emb:.3f}s ({len(test_texts) / t_infer_emb:.1f} sent/s)"
+    )
     console.print(f"  • Embedding shape: {embeddings.shape}")
-    console.print(f"  • Peak VRAM during BGE-M3 inference: [bold magenta]{peak_emb_vram:.1f} MB[/bold magenta]\n")
+    console.print(
+        f"  • Peak VRAM during BGE-M3 inference: [bold magenta]{peak_emb_vram:.1f} MB[/bold magenta]\n"
+    )
 
     # -------------------------------------------------------------
     # 2. Test BGE-Reranker (FP16) resident concurrently
     # -------------------------------------------------------------
-    console.print("[bold yellow]===> 2. Testing BGE-Reranker-Large (FP16) Concurrently...[/bold yellow]")
+    console.print(
+        "[bold yellow]===> 2. Testing BGE-Reranker-Large (FP16) Concurrently...[/bold yellow]"
+    )
     t0 = time.perf_counter()
     reranker = BGEReranker(
         model_name="BAAI/bge-reranker-large",
@@ -96,7 +106,9 @@ def run_benchmark():
 
     mem_after_both = get_vram_info()
     console.print(f"  • Load time: {t_load_rerank:.2f}s")
-    console.print(f"  • VRAM with [bold]BOTH models[/bold] loaded: [cyan]{mem_after_both['allocated']:.1f} MB[/cyan] (Reserved: {mem_after_both['reserved']:.1f} MB)")
+    console.print(
+        f"  • VRAM with [bold]BOTH models[/bold] loaded: [cyan]{mem_after_both['allocated']:.1f} MB[/cyan] (Reserved: {mem_after_both['reserved']:.1f} MB)"
+    )
 
     # Sample reranking pairs
     sample_pairs = [
@@ -107,11 +119,15 @@ def run_benchmark():
     t0 = time.perf_counter()
     scores = reranker.compute_scores(sample_pairs)
     t_infer_rerank = time.perf_counter() - t0
-    total_peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 2)
+    total_peak_vram = torch.cuda.max_memory_allocated() / (1024**2)
 
-    console.print(f"  • Reranked {len(sample_pairs)} pairs in {t_infer_rerank:.3f}s ({len(sample_pairs)/t_infer_rerank:.1f} pairs/s)")
+    console.print(
+        f"  • Reranked {len(sample_pairs)} pairs in {t_infer_rerank:.3f}s ({len(sample_pairs) / t_infer_rerank:.1f} pairs/s)"
+    )
     console.print(f"  • Top score: {max(scores):.4f} | Min score: {min(scores):.4f}")
-    console.print(f"  • Overall Peak VRAM (Both Models + Inference): [bold magenta]{total_peak_vram:.1f} MB[/bold magenta] (~{total_peak_vram/1024:.2f} GB)\n")
+    console.print(
+        f"  • Overall Peak VRAM (Both Models + Inference): [bold magenta]{total_peak_vram:.1f} MB[/bold magenta] (~{total_peak_vram / 1024:.2f} GB)\n"
+    )
 
     # -------------------------------------------------------------
     # Summary Table
@@ -145,14 +161,14 @@ def run_benchmark():
         "Peak During Full Inference",
         f"[bold]{total_peak_vram:.1f} MB[/bold]",
         f"{get_vram_info()['reserved']:.1f} MB",
-        f"[bold]{free_remaining:.1f} MB (~{free_remaining/1024:.2f} GB)[/bold]",
+        f"[bold]{free_remaining:.1f} MB (~{free_remaining / 1024:.2f} GB)[/bold]",
     )
 
     console.print(table)
 
     if free_remaining > 1000:
         console.print(
-            f"[bold green]✔ SUCCESS: Both models run comfortably in FP16 with {free_remaining/1024:.2f} GB VRAM headroom to spare![/bold green]"
+            f"[bold green]✔ SUCCESS: Both models run comfortably in FP16 with {free_remaining / 1024:.2f} GB VRAM headroom to spare![/bold green]"
         )
     elif free_remaining > 300:
         console.print(

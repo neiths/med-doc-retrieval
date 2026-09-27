@@ -1,0 +1,178 @@
+[
+  {
+    "id": 1,
+    "relevant_docs": [
+      "vi_urology_001",
+      "31976211",
+      "zh_urology_001"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_urology_001",
+        "chunk_text": "Khi sỏi niệu quản gây tắc nghẽn hoàn toàn đường dẫn niệu kèm theo sốt hoặc dấu hiệu nhiễm khuẩn huyết, người bệnh cần được can thiệp giải áp cấp cứu bằng đặt ống thông niệu quản (sonde Double J) hoặc mở thận ra da qua hướng dẫn siêu âm."
+      },
+      {
+        "doc_id": "31976211",
+        "chunk_text": "In cases of acute obstructive ureteral calculi with concurrent urinary tract infection, urgent decompression via retrograde ureteral stenting (Double-J stent) or percutaneous nephrostomy is the gold standard of care."
+      },
+      {
+        "doc_id": "zh_urology_001",
+        "chunk_text": "对于输尿管结石引起的急性尿路梗阻合并感染患者，急诊逆行留置输尿管双J管或经皮肾造瘘引流尿液是挽救肾功能、防止感染性休克的首要治疗手段。"
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "relevant_docs": [
+      "vi_cardio_002",
+      "34433215",
+      "zh_cardio_002"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_cardio_002",
+        "chunk_text": "Bệnh nhân nhồi máu cơ tim cấp ST chênh lên cần được dùng ngay liều tải kháng kết tập tiểu cầu kép (Aspirin 150-300mg kèm Ticagrelor 180mg hoặc Clopidogrel 300-600mg), đồng thời chuyển khẩn cấp đến phòng can thiệp tim mạch để can thiệp động mạch vành qua da (PCI) thì đầu trong vòng 120 phút từ khi tiếp cận y tế."
+      },
+      {
+        "doc_id": "34433215",
+        "chunk_text": "Primary percutaneous coronary intervention (PCI) is the preferred reperfusion therapy for patients with STEMI within 12 hours of symptom onset, provided it can be performed within 120 minutes of STEMI diagnosis."
+      },
+      {
+        "doc_id": "zh_cardio_002",
+        "chunk_text": "急性ST段抬高型心肌梗死（STEMI）发病12小时内的患者应优先实施直接经皮冠状动脉介入治疗（PPCI），要求首次医疗接触至导丝通过病变时间（FMC-to-W）控制在120分钟以内。"
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "relevant_docs": [
+      "vi_cardio_003",
+      "34424333",
+      "zh_cardio_003"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_cardio_003",
+        "chunk_text": "Phác đồ điều trị nội khoa nền tảng (tứ trụ) cho suy tim phân suất tống máu giảm (HFrEF) bao gồm: thuốc ức chế thụ thể angiotensin-neprilysin (ARNI) hoặc ức chế men chuyển (ACEi), thuốc chẹn beta giao cảm (như bisoprolol, carvedilol), thuốc kháng aldosterone (MRA như spironolactone) và thuốc ức chế SGLT2 (dapagliflozin hoặc empagliflozin)."
+      },
+      {
+        "doc_id": "34424333",
+        "chunk_text": "Guideline-directed medical therapy for heart failure with reduced ejection fraction comprises four foundational pillars: an ARNI/ACEi, an evidence-based beta-blocker, a mineralocorticoid receptor antagonist (MRA), and an SGLT2 inhibitor."
+      },
+      {
+        "doc_id": "zh_cardio_003",
+        "chunk_text": "针对射血分数降低心力衰竭（HFrEF）患者的基础药物治疗被称为‘新四联’方案，包含血管紧张素受体脑啡肽酶抑制剂（ARNI）、β受体阻滞剂、醛固酮受体拮抗剂（MRA）以及SGLT2抑制剂。"
+      }
+    ]
+  },
+  {
+    "id": 4,
+    "relevant_docs": [
+      "vi_pulmo_004",
+      "31573350",
+      "zh_pulmo_004"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_pulmo_004",
+        "chunk_text": "Thang điểm CURB-65 đánh giá 5 yếu tố: Rối loạn ý thức (Confusion), Urê máu > 7 mmol/L, Tần số thở >= 30 lần/phút, Huyết áp tâm thu < 90 mmHg hoặc tâm trương <= 60 mmHg, và Tuổi >= 65. Với điểm CURB-65 từ 2 trở lên, bệnh nhân nên nhập viện điều trị với kháng sinh phối hợp giữa beta-lactam và macrolide hoặc quinolone hô hấp."
+      },
+      {
+        "doc_id": "31573350",
+        "chunk_text": "The CURB-65 score is widely recommended to stratify severity in community-acquired pneumonia. For hospitalized non-ICU patients, standard empiric antimicrobial regimens consist of a beta-lactam combined with a macrolide or respiratory fluoroquinolone monotherapy."
+      },
+      {
+        "doc_id": "zh_pulmo_004",
+        "chunk_text": "CURB-65评分是评估社区获得性肺炎（CAP）严重程度的关键工具。评分>=2分患者建议住院治疗，初始经验性抗感染方案推荐β-内酰胺类联合大环内酯类或单用呼吸喹诺酮类药物。"
+      }
+    ]
+  },
+  {
+    "id": 5,
+    "relevant_docs": [
+      "vi_gastro_005",
+      "33785465",
+      "zh_gastro_005"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_gastro_005",
+        "chunk_text": "Xử trí ban đầu xuất huyết do vỡ giãn tĩnh mạch thực quản gồm: hồi sức thể tích thận trọng duy trì huyết sắc tố 7-8 g/dL, dùng sớm thuốc vận mạch giảm áp lực tĩnh mạch cửa (terlipressin, octreotide hoặc somatostatin), kháng sinh dự phòng cephalosporin thế hệ 3 (ceftriaxone) và tiến hành nội soi thắt vòng cao su tĩnh mạch thực quản trong vòng 12 giờ."
+      },
+      {
+        "doc_id": "33785465",
+        "chunk_text": "Initial therapy for acute esophageal variceal hemorrhage includes cautious volume resuscitation targeting hemoglobin 7 to 8 g/dL, immediate administration of vasoactive drugs (terlipressin or octreotide), antibiotic prophylaxis with ceftriaxone, and urgent endoscopic band ligation within 12 hours."
+      },
+      {
+        "doc_id": "zh_gastro_005",
+        "chunk_text": "食管胃静脉曲张破裂急性出血的急救原则包括：限制性液体复苏维持血红蛋白在70-80 g/L之间，尽早应用降门脉压血管活性药物（特利加压素或生长抑素类似物），常规静脉给予第三代头孢菌素预防感染，并在12小时内行内镜下套扎术（EBL）。"
+      }
+    ]
+  },
+  {
+    "id": 6,
+    "relevant_docs": [
+      "vi_endo_006",
+      "32554789",
+      "zh_endo_006"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_endo_006",
+        "chunk_text": "Hạ đường huyết nặng được định nghĩa khi glucose máu < 3.0 mmol/L (54 mg/dL) hoặc bệnh nhân có rối loạn ý thức cần trợ giúp từ người khác. Với bệnh nhân hôn mê mất ý thức, tuyệt đối không cho ăn uống qua đường miệng; cấp cứu bằng tiêm tĩnh mạch bolus 20-50 ml dung dịch Glucose 20-30%, hoặc tiêm bắp 1 mg Glucagon, sau đó truyền duy trì Glucose 5-10%."
+      },
+      {
+        "doc_id": "32554789",
+        "chunk_text": "Severe hypoglycemia requiring external assistance is treated emergently with intravenous dextrose (25 to 50 mL of 50% dextrose) or intramuscular glucagon (1 mg) if intravenous access is unavailable, followed by a continuous infusion of 10% dextrose."
+      },
+      {
+        "doc_id": "zh_endo_006",
+        "chunk_text": "对于意识障碍的严重低血糖糖尿病患者，禁止经口喂食。应立即建立静脉通路，静脉推注50%葡萄糖注射液40-60 ml，或肌肉注射胰高血糖素1 mg；待神志恢复后继续静脉滴注10%葡萄糖以维持血糖平稳。"
+      }
+    ]
+  },
+  {
+    "id": 7,
+    "relevant_docs": [
+      "vi_neuro_007",
+      "30482750",
+      "zh_neuro_007"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_neuro_007",
+        "chunk_text": "Thuốc tiêu sợi huyết Alteplase (rt-PA) đường tĩnh mạch với liều 0.9 mg/kg (tối đa 90 mg, bolus 10% trong 1 phút và truyền 90% còn lại trong 60 phút) được chỉ định trong cửa sổ vàng 4.5 giờ kể từ thời điểm khởi phát triệu chứng ở bệnh nhân đột quỵ thiếu máu não cấp sau khi loại trừ xuất huyết não trên phim CT scanner."
+      },
+      {
+        "doc_id": "30482750",
+        "chunk_text": "Intravenous alteplase (0.9 mg/kg, maximum 90 mg) administered within 4.5 hours of symptom onset significantly improves functional outcomes in patients with acute ischemic stroke without evidence of intracranial hemorrhage on non-contrast CT."
+      },
+      {
+        "doc_id": "zh_neuro_007",
+        "chunk_text": "对发病在4.5小时内的急性缺血性脑卒中患者，经头颅CT排除脑出血后，应尽早给予重组人组织型纤溶酶原激活剂（rt-PA，阿替普酶）静脉溶栓治疗，剂量为0.9 mg/kg（最大剂量90 mg）。"
+      }
+    ]
+  },
+  {
+    "id": 8,
+    "relevant_docs": [
+      "vi_neuro_008",
+      "31754020",
+      "zh_neuro_008"
+    ],
+    "relevant_chunks": [
+      {
+        "doc_id": "vi_neuro_008",
+        "chunk_text": "Bước 1 (giai đoạn sớm 0-10 phút): tiêm tĩnh mạch Benzodiazepine (Lorazepam 4mg hoặc Diazepam 10mg tiêm chậm). Bước 2 (10-30 phút nếu cơn chưa dứt): truyền tĩnh mạch một trong ba thuốc chống động kinh thế hệ hai (Levetiracetam 60 mg/kg tối đa 4500mg, hoặc Valproate natri 40 mg/kg tối đa 3000mg, hoặc Fosphenytoin 20 mg PE/kg). Bước 3 (> 30 phút): gây mê hồi sức bằng Propofol, Midazolam hoặc Thiopental."
+      },
+      {
+        "doc_id": "31754020",
+        "chunk_text": "Initial therapy (phase 1) consists of intravenous benzodiazepines, preferably lorazepam 4 mg. If seizures persist beyond 10-15 minutes (phase 2), second-line intravenous antiepileptic drugs include levetiracetam (60 mg/kg), fosphenytoin (20 mg PE/kg), or valproate sodium (40 mg/kg)."
+      },
+      {
+        "doc_id": "zh_neuro_008",
+        "chunk_text": "惊厥性癫痫持续状态初始治疗首选静脉注射地西泮（10 mg）或劳拉西泮（4 mg）。若发作持续超过10分钟，进入第二阶段治疗，推荐静脉给予左乙拉西坦（60 mg/kg）或丙戊酸钠（40 mg/kg）；超过30分钟则需在ICU进行咪达唑仑或丙泊酚全麻诱导。"
+      }
+    ]
+  }
+]

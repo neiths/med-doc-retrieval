@@ -44,20 +44,73 @@ def compute_prf(
     return precision, recall, f_score
 
 
+def compute_chunk_prf(
+    pred_chunks: list[tuple[str, str]],
+    gt_chunks: list[tuple[str, str]],
+    match_mode: str = "overlap",
+    min_iou: float = 0.4,
+    beta: float = 2.0,
+) -> tuple[float, float, float]:
+    """Computes Precision, Recall, and F_beta for chunks supporting exact, containment, or token IoU overlap."""
+    if not gt_chunks or not pred_chunks:
+        return 0.0, 0.0, 0.0
+
+    if match_mode == "exact":
+        norm_pred = {(d, t.strip()) for d, t in pred_chunks}
+        norm_gt = {(d, t.strip()) for d, t in gt_chunks}
+        return compute_prf(norm_pred, norm_gt, beta=beta)
+
+    pred_matched = set()
+    gt_matched = set()
+
+    for p_idx, (p_did, p_text) in enumerate(pred_chunks):
+        p_text_clean = p_text.strip()
+        p_tokens = set(p_text_clean.split())
+        for g_idx, (g_did, g_text) in enumerate(gt_chunks):
+            if str(p_did) != str(g_did):
+                continue
+            g_text_clean = g_text.strip()
+            # Exact match or containment (gold in pred or pred in gold)
+            if (
+                p_text_clean == g_text_clean
+                or g_text_clean in p_text_clean
+                or p_text_clean in g_text_clean
+            ):
+                pred_matched.add(p_idx)
+                gt_matched.add(g_idx)
+                continue
+
+            if match_mode == "overlap":
+                g_tokens = set(g_text_clean.split())
+                iou = len(p_tokens & g_tokens) / max(len(p_tokens | g_tokens), 1)
+                if iou >= min_iou:
+                    pred_matched.add(p_idx)
+                    gt_matched.add(g_idx)
+
+    precision = len(pred_matched) / len(pred_chunks) if pred_chunks else 0.0
+    recall = len(gt_matched) / len(gt_chunks) if gt_chunks else 0.0
+
+    beta_sq = beta**2
+    denominator = (beta_sq * precision) + recall
+    f_score = (1 + beta_sq) * precision * recall / denominator if denominator > 0 else 0.0
+    return precision, recall, f_score
+
+
 def evaluate_query(
     pred_docs: list[str],
     gt_docs: list[str],
     pred_chunks: list[tuple[str, str]],  # (doc_id, chunk_text)
     gt_chunks: list[tuple[str, str]],  # (doc_id, chunk_text)
+    chunk_match_mode: str = "overlap",
 ) -> dict[str, float]:
     """Evaluates a single query at document and chunk levels."""
     # Document level
     doc_p, doc_r, doc_f2 = compute_prf(set(pred_docs), set(gt_docs), beta=2.0)
 
-    # Chunk level (matching exact tuple: doc_id and normalized chunk_text)
-    norm_pred_chunks = {(doc_id, text.strip()) for doc_id, text in pred_chunks}
-    norm_gt_chunks = {(doc_id, text.strip()) for doc_id, text in gt_chunks}
-    chunk_p, chunk_r, chunk_f2 = compute_prf(norm_pred_chunks, norm_gt_chunks, beta=2.0)
+    # Chunk level
+    chunk_p, chunk_r, chunk_f2 = compute_chunk_prf(
+        pred_chunks, gt_chunks, match_mode=chunk_match_mode, beta=2.0
+    )
 
     return {
         "doc_precision": doc_p,
@@ -72,6 +125,7 @@ def evaluate_query(
 def evaluate_predictions(
     predictions: list[dict[str, Any]],
     ground_truth: list[dict[str, Any]],
+    chunk_match_mode: str = "overlap",
 ) -> dict[str, float]:
     """Computes Macro-Averaged Precision, Recall, and F2 scores across all queries.
 
@@ -79,6 +133,7 @@ def evaluate_predictions(
         predictions: List of dicts matching competition submission format:
             [{ "id": int, "relevant_docs": [...], "relevant_chunks": [{"doc_id": ..., "chunk_text": ...}] }]
         ground_truth: List of dicts in the same schema with gold labels.
+        chunk_match_mode: Match criteria for chunks ('overlap', 'containment', or 'exact').
 
     Returns:
         Dict containing macro averages and overall combined score.
@@ -110,7 +165,9 @@ def evaluate_predictions(
             for c in gt.get("relevant_chunks", [])
         ]
 
-        scores = evaluate_query(pred_docs, gt_docs, pred_chunks, gt_chunks)
+        scores = evaluate_query(
+            pred_docs, gt_docs, pred_chunks, gt_chunks, chunk_match_mode=chunk_match_mode
+        )
         doc_f2s.append(scores["doc_f2"])
         chunk_f2s.append(scores["chunk_f2"])
         doc_precisions.append(scores["doc_precision"])
