@@ -95,8 +95,9 @@ class QdrantLocalIndex:
                 # Deterministic UUID from chunk_id
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 
+                sparse_text = chunk.get("contextual_text") or chunk.get("chunk_text", "")
                 sparse_vec = text_to_sparse_vector(
-                    text=chunk.get("chunk_text", ""),
+                    text=sparse_text,
                     lang=chunk.get("lang", "auto"),
                 )
 
@@ -110,6 +111,8 @@ class QdrantLocalIndex:
                         "doc_id": str(chunk.get("doc_id", "")),
                         "chunk_id": chunk_id,
                         "chunk_text": chunk.get("chunk_text", ""),
+                        "contextual_text": chunk.get("contextual_text")
+                        or chunk.get("chunk_text", ""),
                         "lang": chunk.get("lang", "en"),
                         "title": chunk.get("metadata", {}).get("title", ""),
                         "source": chunk.get("metadata", {}).get("source", ""),
@@ -195,6 +198,7 @@ class QdrantLocalIndex:
                 "chunk_id": payload.get("chunk_id", ""),
                 "doc_id": payload.get("doc_id", ""),
                 "chunk_text": payload.get("chunk_text", ""),
+                "contextual_text": payload.get("contextual_text") or payload.get("chunk_text", ""),
                 "lang": payload.get("lang", "en"),
                 "score": float(p.score) if p.score is not None else 0.0,
                 "metadata": {
