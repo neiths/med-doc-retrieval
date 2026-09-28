@@ -50,8 +50,11 @@ cp .env.example .env
 > Tuyệt đối **KHÔNG commit file dữ liệu nặng** (`.jsonl`, `.faiss`, `.pkl`, `.zip`, `.pt`, `.safetensors`) lên Git repo. Thư mục `data/` và `outputs/` đã được cấu hình trong `.gitignore`.
 
 ### Cấu trúc dữ liệu cục bộ:
-- `data/lexicon/medical_terms.json`: Từ điển y khoa song ngữ VI-EN (hơn 100+ thuật ngữ chuyên khoa, **được lưu trên Git**).
+- `data/lexicon/icd10_ontology.json`: Cây phân loại bệnh học song ngữ chính thức Bộ Y tế & WHO (10.002 thực thể, **lưu trên Git**).
+- `data/lexicon/icd10_vi_en.json`: Từ điển ánh xạ câu hỏi thực thể bệnh lý VI -> EN (9.365 thực thể, **lưu trên Git**).
+- `data/lexicon/medical_terms.json`: Từ điển y khoa song ngữ mở rộng tích hợp toàn diện (9.440 thuật ngữ lâm sàng, **lưu trên Git**).
 - `configs/pubmed_stopwords.txt`: Danh sách stopwords / filler words cho truy vấn y sinh PubMed (**được lưu trên Git**).
+- `scripts/collect_icd10_ontology.py`: Script tự động thu thập từ cổng Bộ Y tế (`icd.kcb.vn`) và ánh xạ WHO ICD-10.
 - `data/raw/`: Chứa file ban đầu từ BTC:
   - `urls_vi.jsonl`, `urls_zh.jsonl` (Danh sách URL bài viết VI và ZH)
   - `queries_test.jsonl` (Tập câu hỏi kiểm thử tiếng Việt)
