@@ -232,3 +232,8 @@ outputs/*
 *.bin
 *.pt
 *.safetensors
+
+# Lexicon raw intermediate caches
+data/lexicon/*_raw.json
+data/lexicon/who_icd10_codes.csv
+

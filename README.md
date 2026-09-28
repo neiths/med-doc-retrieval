@@ -66,7 +66,7 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 | **Contextual Chunking** | Đa ngôn ngữ (`vi`, `zh`, `en`) | Bổ sung tiêu đề/mục (`contextual_text`) khi tính embedding/reranking; **bảo toàn 100% chuỗi con gốc** (`chunk_text`) cho submission. |
 | **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số (dung sai $\le 15B$, tính riêng từng model), phát hành trước 01/08/2026. |
 | **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ (phát hành trước 01/08/2026). |
-| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` + Bilingual Lexicon | Mô hình dịch mở ~289MB kết hợp `data/lexicon/medical_terms.json` và `configs/pubmed_stopwords.txt`. |
+| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` / `ndhieu1101` + ICD-10 Ontology | Mô hình dịch y khoa kết hợp từ điển song ngữ chuẩn hóa Bộ Y tế Việt Nam & WHO (>10.000 thực thể bệnh lý, 9.440 thuật ngữ). |
 | **External Medical API** | PubTator 3.0, Europe PMC & NCBI Entrez | Tìm kiếm bài báo PubMed theo từ khóa, tải BiocJSON/XML và lưu cache tự động tại `pubmed_cache.jsonl`. |
 | **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. Đánh giá chunk theo cơ chế overlap/containment. |
 
@@ -81,7 +81,9 @@ med-doc-retrieval/
 │   └── pubmed_stopwords.txt    # Danh sách stopwords / filler words khi tìm kiếm y sinh PubMed
 ├── data/
 │   ├── lexicon/
-│   │   └── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (>100 thuật ngữ, lưu trên Git)
+│   │   ├── icd10_ontology.json # Cây phân loại bệnh học song ngữ chính thức Bộ Y tế & WHO (10.002 thực thể)
+│   │   ├── icd10_vi_en.json    # Từ điển ánh xạ thực thể bệnh lý VI -> EN phục vụ retrieval
+│   │   └── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (9.440 thuật ngữ lâm sàng)
 │   ├── mock/                   # Bộ dữ liệu mock validation đa ngôn ngữ phục vụ benchmark
 │   │   ├── articles_all.jsonl  # 29 bài viết mẫu (VI, ZH, EN có PMID, distractors)
 │   │   ├── queries_val.jsonl   # 8 câu hỏi kiểm định thực tế
@@ -115,10 +117,12 @@ med-doc-retrieval/
 ├── notebooks/
 │   └── 01_baseline_exploration.ipynb # Notebook mẫu thử nghiệm từng thành phần
 ├── scripts/
+│   ├── collect_icd10_ontology.py # Thu thập tự động cây ICD-10 Bộ Y tế & ánh xạ WHO
 │   ├── run_mock_eval.py        # Benchmark đánh giá Macro F2 end-to-end trên tập mock validation
 │   └── test_gpu_memory.py      # Script stress test VRAM trên GPU (RTX 3050 6GB)
-├── tests/                      # Bộ kiểm thử tự động (25/25 tests passing)
+├── tests/                      # Bộ kiểm thử tự động (30/30 tests passing)
 │   ├── test_chunker.py
+│   ├── test_icd10_ontology.py
 │   ├── test_metrics.py
 │   ├── test_pubmed.py
 │   ├── test_qdrant.py
