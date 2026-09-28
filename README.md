@@ -64,11 +64,11 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 | **Quản lý Môi trường** | `uv` + Python 3.11 | Tối ưu hóa cài đặt cực nhanh, đồng bộ 100% qua `uv.lock`. |
 | **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense + Sparse) & RRF trực tiếp ở tầng engine. |
 | **Contextual Chunking** | Đa ngôn ngữ (`vi`, `zh`, `en`) | Bổ sung tiêu đề/mục (`contextual_text`) khi tính embedding/reranking; **bảo toàn 100% chuỗi con gốc** (`chunk_text`) cho submission. |
-| **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số, phát hành trước 06/2026. |
-| **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ. |
+| **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số (dung sai $\le 15B$, tính riêng từng model), phát hành trước 01/08/2026. |
+| **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ (phát hành trước 01/08/2026). |
 | **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` + Bilingual Lexicon | Mô hình dịch mở ~289MB kết hợp `data/lexicon/medical_terms.json` và `configs/pubmed_stopwords.txt`. |
 | **External Medical API** | PubTator 3.0, Europe PMC & NCBI Entrez | Tìm kiếm bài báo PubMed theo từ khóa, tải BiocJSON/XML và lưu cache tự động tại `pubmed_cache.jsonl`. |
-| **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. |
+| **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. Đánh giá chunk theo cơ chế overlap/containment. |
 
 ---
 
@@ -240,7 +240,7 @@ $$F_2 = \frac{5 \times \mathrm{Precision} \times \mathrm{Recall}}{4 \times \math
 1. [ ] **Định dạng file ZIP:** Phải là file ZIP phẳng, chỉ chứa **duy nhất 1 file `.json`** (không nằm trong thư mục con).
 2. [ ] **Cấu trúc trường:** Trường `id` (int), `relevant_docs` (list string), `relevant_chunks` (list object `{"doc_id": "...", "chunk_text": "..."}`).
 3. [ ] **Quy định `doc_id`:** Với VI/ZH là `id` gốc từ BTC; với EN **bắt buộc là mã PMID** của PubMed.
-4. [ ] **Quy định `chunk_text`:** Phải là chuỗi trích xuất nguyên bản từ tài liệu gốc, không tự ý viết lại hay sinh mới.
+4. [ ] **Quy định `chunk_text`:** Phải là chuỗi trích xuất nguyên bản từ tài liệu gốc, không tự ý viết lại hay sinh mới. Khuyến nghị mỗi chunk không vượt quá ~1.024 tokens.
 5. [ ] **Giới hạn số lần nộp:** Tối đa 10 lần/ngày (Public Phase) và 5 lần tổng cộng (Private Phase).
 
 ---

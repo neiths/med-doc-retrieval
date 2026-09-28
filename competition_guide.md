@@ -36,7 +36,7 @@ Quy định về dữ liệu bên ngoài và mô hình ngôn ngữ huấn luyệ
 
 Để đảm bảo sự công bằng trong cuộc thi, người tham gia phải khai báo các nguồn dữ liệu sử dụng. Người tham gia được phép sử dụng dữ liệu từ các nguồn bên ngoài, nhưng phải trích dẫn rõ ràng và cung cấp đầy đủ thông tin về nguồn gốc dữ liệu để Ban Tổ chức có thể kiểm tra, xác minh khi cần thiết.
 
-Người tham gia có thể sử dụng các mô hình ngôn ngữ huấn luyện trước và LLM có trọng số hoặc mã nguồn được công khai (ví dụ: trên Hugging Face hoặc các nền tảng tương tự). Không được sử dụng các LLM có mô hình đóng (ví dụ: GPT-4o, Gemini, ...). Mọi mô hình được sử dụng phải được phát hành trước ngày 1 tháng 6 năm 2026 (giờ Việt Nam) và có kích thước không quá 14B tham số.
+Người tham gia có thể sử dụng các mô hình ngôn ngữ huấn luyện trước và LLM có trọng số hoặc mã nguồn được công khai (ví dụ: trên Hugging Face hoặc các nền tảng tương tự). Không được sử dụng các LLM có mô hình đóng (ví dụ: GPT-4o, Gemini, ...). Mọi mô hình được sử dụng phải được phát hành trước ngày 1 tháng 8 năm 2026 (giờ Việt Nam) và có kích thước không quá 14B tham số (BTC cho phép trong khoảng 14B, miễn là không vượt quá 15B). Giới hạn này áp dụng cho từng mô hình riêng lẻ trong hệ thống.
 
 
 ## Phương pháp đánh giá
@@ -237,3 +237,24 @@ Kết quả tìm kiếm có thể được sử dụng làm tập tài liệu �
   - **Tiếng Việt & Tiếng Trung**: Cung cấp danh sách URL bài viết y khoa. Đội thi chủ động cào văn bản, tiền xử lý, phân đoạn và lập chỉ mục.
   - **Tiếng Anh**: Không cung cấp danh sách tài liệu. Phạm vi giới hạn ở PubMed. Đội thi chủ động tìm kiếm qua các API: NCBI Entrez, Europe PMC, hoặc PubTator 3.0.
 - **Ngày phát hành chính thức**: Danh sách nguồn dữ liệu và bộ câu hỏi chính thức sẽ được BTC cung cấp vào ngày **01/10/2026**.
+
+---
+
+### 📢 Cập nhật thông báo & Giải đáp chính thức từ BTC (28/09/2026)
+
+#### 1. Điều chỉnh mốc thời gian phát hành mô hình
+- Mốc phát hành model được điều chỉnh từ trước ngày 01/06/2026 thành **trước ngày 01/08/2026**.
+
+#### 2. Quy định về kích thước và số lượng tham số (<=14B / ~15B)
+- **Áp dụng theo từng model**: Giới hạn $\le 14\text{B}$ tham số áp dụng cho **từng model riêng lẻ**, không tính theo tổng số tham số của các model trong pipeline. Tất cả các model (embedding, reranker, query translation, LLM) đều phải thỏa mãn quy định này riêng lẻ.
+- **Dung sai tham số**: BTC chấp nhận các model trong khoảng 14B, **miễn là không vượt quá 15B** (ví dụ model thực tế có 14.7B tham số vẫn hợp lệ).
+
+#### 3. Quy định về Fine-tuning, Pruning và Knowledge Distillation
+- **Fine-tuning**: Được phép fine-tune model gốc hợp lệ (gốc phát hành trước 01/08/2026, $\le 15\text{B}$). **Lưu ý**: Nên chuyển checkpoint fine-tune về **Private** trên Hugging Face để tránh phát sinh vướng mắc về mốc thời gian public khi BTC kiểm tra.
+- **Model Pruning**: Được phép prune một model gốc lớn (>14B) để tạo ra model cuối cùng $\le 14\text{B}$ (hoặc $\le 15\text{B}$).
+- **Knowledge Distillation**: Được phép sử dụng model lớn (>14B) làm Teacher để distill sang Student $\le 14\text{B}$ (Teacher chỉ chạy trong quá trình huấn luyện offline, không được chạy khi suy luận/inference).
+
+#### 4. Cơ chế chấm điểm và đánh giá `chunk_text`
+- **Cách chấm**: Với mỗi câu hỏi, BTC đã xác định trước các tài liệu và phần thông tin quan trọng cần được tìm thấy trong tài liệu đó. Khi chấm `chunk_text`, hệ thống kiểm tra xem chunk đã nộp có chứa phần thông tin này hay không.
+- **Điều kiện tính là Relevant**: Nếu chunk nộp **có nội dung tương ứng hoặc overlap đủ với đoạn cần tìm**, chunk sẽ được tính là relevant (khớp với chế độ đánh giá `overlap` / `containment` trong hệ thống).
+- **Khuyến nghị độ dài chunk**: Để tránh việc nộp chunk dài gần như toàn bộ tài liệu, BTC khuyến nghị **mỗi chunk không dài quá khoảng 1.024 tokens**.
