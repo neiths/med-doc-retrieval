@@ -97,11 +97,17 @@ class QueryTranslator:
     def __init__(
         self,
         model_name: str = "Helsinki-NLP/opus-mt-vi-en",
+        prompt_prefix: str = "",
         device: str = "auto",
         lexicon_path: Path | str | None = "data/lexicon/medical_terms.json",
         stopwords_path: Path | str | None = "configs/pubmed_stopwords.txt",
     ):
         self.model_name = model_name
+        self.prompt_prefix = prompt_prefix
+        # Auto-detect T5 / ndhieu models if prompt_prefix is empty
+        if not self.prompt_prefix and any(k in model_name.lower() for k in ["t5", "ndhieu"]):
+            self.prompt_prefix = "vi: "
+
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
@@ -129,14 +135,14 @@ class QueryTranslator:
             )
 
     def _load_model(self):
-        """Lazy loader for MarianMT model."""
+        """Lazy loader for sequence-to-sequence translation models (MarianMT, T5, ViT5)."""
         if self._model is None or self._tokenizer is None:
-            from transformers import MarianMTModel, MarianTokenizer
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
             logger.info(f"Loading translation model weights from {self.model_name}...")
-            self._tokenizer = MarianTokenizer.from_pretrained(self.model_name)
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             dtype = torch.float16 if self.device == "cuda" else torch.float32
-            self._model = MarianMTModel.from_pretrained(self.model_name, torch_dtype=dtype)
+            self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name, torch_dtype=dtype)
             self._model.to(self.device)
             self._model.eval()
 
@@ -147,7 +153,10 @@ class QueryTranslator:
 
         try:
             self._load_model()
-            inputs = self._tokenizer([vi_text], return_tensors="pt", padding=True, truncation=True)
+            input_text = f"{self.prompt_prefix}{vi_text}" if self.prompt_prefix else vi_text
+            inputs = self._tokenizer(
+                [input_text], return_tensors="pt", padding=True, truncation=True
+            )
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             with torch.no_grad():
