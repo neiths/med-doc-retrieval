@@ -54,7 +54,8 @@ reranker:
 
 query_translation:
   enabled: true
-  model_name: "Helsinki-NLP/opus-mt-vi-en"
+  model_name: "Helsinki-NLP/opus-mt-vi-en"  # "Helsinki-NLP/opus-mt-vi-en" or "ndhieu1101/medical-bidirectional-machine-translation-checkpoints-511042"
+  prompt_prefix: ""                         # e.g. "vi: " for bidirectional T5 models (auto-detected if empty)
   device: "auto"
   lexicon_path: "data/lexicon/medical_terms.json"
   stopwords_path: "configs/pubmed_stopwords.txt"

@@ -59,3 +59,19 @@ def test_custom_lexicon_loading(tmp_path):
     translator = QueryTranslator(lexicon_path=custom_lex, stopwords_path=custom_stop)
     assert "hội chứng thận hư" in translator.lexicon
     assert "xyzstopword" in translator.stopwords
+
+
+def test_prompt_prefix_auto_detection():
+    # MarianMT default: empty prefix
+    tr_marian = QueryTranslator(model_name="Helsinki-NLP/opus-mt-vi-en")
+    assert tr_marian.prompt_prefix == ""
+
+    # T5 / ndhieu models: auto-detect "vi: "
+    tr_t5 = QueryTranslator(
+        model_name="ndhieu1101/medical-bidirectional-machine-translation-checkpoints-511042"
+    )
+    assert tr_t5.prompt_prefix == "vi: "
+
+    # Explicit override
+    tr_custom = QueryTranslator(model_name="google/mt5-base", prompt_prefix="translate: ")
+    assert tr_custom.prompt_prefix == "translate: "

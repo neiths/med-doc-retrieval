@@ -53,7 +53,10 @@ class MedicalRetrievalPipeline:
         if self.config.query_translation.enabled:
             self.translator = QueryTranslator(
                 model_name=self.config.query_translation.model_name,
+                prompt_prefix=getattr(self.config.query_translation, "prompt_prefix", ""),
                 device=self.config.query_translation.device,
+                lexicon_path=self.config.query_translation.lexicon_path,
+                stopwords_path=self.config.query_translation.stopwords_path,
             )
 
         self.pubmed_client = None

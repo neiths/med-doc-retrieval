@@ -67,6 +67,7 @@ class RerankerConfig(BaseModel):
 class QueryTranslationConfig(BaseModel):
     enabled: bool = True
     model_name: str = "Helsinki-NLP/opus-mt-vi-en"
+    prompt_prefix: str = ""
     device: str = "auto"
     lexicon_path: Path | None = Path("data/lexicon/medical_terms.json")
     stopwords_path: Path | None = Path("configs/pubmed_stopwords.txt")
