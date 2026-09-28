@@ -247,4 +247,4 @@ $$F_2 = \frac{5 \times \mathrm{Precision} \times \mathrm{Recall}}{4 \times \math
 
 ## 👥 Làm Việc Nhóm
 
-Xem quy định chi tiết về phân nhánh Git (`feature/*`, `exp/*`), quy tắc chia sẻ dữ liệu và phân chia vai trò trong đội tại **[TEAM_GUIDE.md](file:///home/thienhb/Workspace/med-doc-retrieval/TEAM_GUIDE.md)**.
+Xem quy định chi tiết về phân nhánh Git (`feature/*`, `exp/*`), quy tắc chia sẻ dữ liệu và phân chia vai trò trong đội tại **[TEAM_GUIDE.md](TEAM_GUIDE.md)**.
