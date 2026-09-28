@@ -118,9 +118,10 @@ med-doc-retrieval/
 │   └── 01_baseline_exploration.ipynb # Notebook mẫu thử nghiệm từng thành phần
 ├── scripts/
 │   ├── collect_icd10_ontology.py # Thu thập tự động cây ICD-10 Bộ Y tế & ánh xạ WHO
+│   ├── preload_models.py       # Tải trước và kiểm tra toàn bộ weights model cho offline inference
 │   ├── run_mock_eval.py        # Benchmark đánh giá Macro F2 end-to-end trên tập mock validation
 │   └── test_gpu_memory.py      # Script stress test VRAM trên GPU (RTX 3050 6GB)
-├── tests/                      # Bộ kiểm thử tự động (30/30 tests passing)
+├── tests/                      # Bộ kiểm thử tự động (32/32 tests passing)
 │   ├── test_chunker.py
 │   ├── test_icd10_ontology.py
 │   ├── test_metrics.py
@@ -128,7 +129,8 @@ med-doc-retrieval/
 │   ├── test_qdrant.py
 │   ├── test_query_translator.py
 │   ├── test_submission.py
-│   └── test_tokenization.py
+│   ├── test_tokenization.py
+│   └── test_url_scraper.py
 ├── outputs/submissions/        # Nơi lưu file kết quả submission.zip
 ├── .env.example                # Template biến môi trường (NCBI, HuggingFace)
 ├── pyproject.toml              # Quản lý dependencies với uv
