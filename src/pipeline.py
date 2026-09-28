@@ -30,6 +30,7 @@ class MedicalRetrievalPipeline:
             chunk_overlap=self.config.chunking.chunk_overlap,
             min_chunk_size=self.config.chunking.min_chunk_size,
             split_by_sentences=self.config.chunking.split_by_sentences,
+            enable_contextual=self.config.chunking.enable_contextual,
         )
         self.embedder = BGEM3Embedder(
             model_name=self.config.embedding.model_name,
@@ -125,7 +126,7 @@ class MedicalRetrievalPipeline:
 
         # 3. Dense & Sparse Indexing
         logger.info("Computing dense embeddings with BGE-M3...")
-        chunk_texts = [c["chunk_text"] for c in all_chunks]
+        chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in all_chunks]
         embeddings = self.embedder.encode(chunk_texts, show_progress_bar=True)
 
         if self.config.retrieval.engine == "qdrant":

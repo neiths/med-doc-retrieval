@@ -20,6 +20,7 @@ chunking:
   chunk_overlap: 64         # Overlap characters between consecutive chunks
   min_chunk_size: 50        # Filter out tiny chunks/noise
   split_by_sentences: true  # Prefer splitting at sentence boundaries
+  enable_contextual: true   # Enrich chunk with document title/context for embedding and reranking
 
 embedding:
   model_name: "BAAI/bge-m3"

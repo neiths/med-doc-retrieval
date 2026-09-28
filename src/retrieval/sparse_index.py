@@ -55,7 +55,7 @@ class SparseIndex:
         self.chunk_metadata = []
 
         for chunk in chunks:
-            text = chunk.get(text_key, "")
+            text = chunk.get("contextual_text") or chunk.get(text_key, "")
             lang = chunk.get("lang", "auto")
             tokens = tokenize_multilingual(text, lang=lang)
             corpus_tokens.append(tokens)

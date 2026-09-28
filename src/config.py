@@ -28,6 +28,7 @@ class ChunkingConfig(BaseModel):
     chunk_overlap: int = 64
     min_chunk_size: int = 50
     split_by_sentences: bool = True
+    enable_contextual: bool = True
 
 
 class EmbeddingConfig(BaseModel):

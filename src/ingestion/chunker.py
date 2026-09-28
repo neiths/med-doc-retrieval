@@ -7,6 +7,46 @@ from pydantic import BaseModel, Field
 from src.ingestion.cleaner import detect_language, normalize_text
 
 
+def build_contextual_text(
+    chunk_text: str,
+    title: str | None = None,
+    section: str | None = None,
+    lang: str = "en",
+) -> str:
+    """Builds an enriched contextual representation for embedding and reranking.
+
+    Prepends document title and section information using language-specific prefixes,
+    while leaving chunk_text untouched for submission.
+    """
+    clean_title = (title or "").strip()
+    clean_section = (section or "").strip()
+
+    if not clean_title and not clean_section:
+        return chunk_text
+
+    header_parts = []
+    if lang == "vi":
+        if clean_title:
+            header_parts.append(f"Tiêu đề: {clean_title}")
+        if clean_section:
+            header_parts.append(f"Mục: {clean_section}")
+        header_parts.append(f"Nội dung: {chunk_text}")
+    elif lang == "zh":
+        if clean_title:
+            header_parts.append(f"标题: {clean_title}")
+        if clean_section:
+            header_parts.append(f"章节: {clean_section}")
+        header_parts.append(f"内容: {chunk_text}")
+    else:  # en or other
+        if clean_title:
+            header_parts.append(f"Title: {clean_title}")
+        if clean_section:
+            header_parts.append(f"Section: {clean_section}")
+        header_parts.append(f"Content: {chunk_text}")
+
+    return "\n".join(header_parts)
+
+
 class DocumentChunk(BaseModel):
     chunk_id: str
     doc_id: str
@@ -14,6 +54,7 @@ class DocumentChunk(BaseModel):
     char_start: int
     char_end: int
     lang: str = "en"
+    contextual_text: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -26,11 +67,13 @@ class DocumentChunker:
         chunk_overlap: int = 64,
         min_chunk_size: int = 50,
         split_by_sentences: bool = True,
+        enable_contextual: bool = True,
     ):
         self.max_chunk_size = max_chunk_size
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
         self.split_by_sentences = split_by_sentences
+        self.enable_contextual = enable_contextual
 
     def _find_split_point(self, text: str, target_end: int) -> int:
         """Finds a natural boundary (paragraph, sentence, or word) near target_end."""
@@ -79,6 +122,16 @@ class DocumentChunker:
 
         # If text is already shorter than max_chunk_size, return it as a single chunk
         if len(cleaned_text) <= self.max_chunk_size:
+            ctx_text = (
+                build_contextual_text(
+                    cleaned_text,
+                    title=meta.get("title"),
+                    section=meta.get("section"),
+                    lang=doc_lang,
+                )
+                if self.enable_contextual
+                else None
+            )
             return [
                 DocumentChunk(
                     chunk_id=f"{doc_id}__c0",
@@ -87,6 +140,7 @@ class DocumentChunker:
                     char_start=0,
                     char_end=len(cleaned_text),
                     lang=doc_lang,
+                    contextual_text=ctx_text,
                     metadata=meta,
                 )
             ]
@@ -110,6 +164,16 @@ class DocumentChunker:
             chunk_slice = cleaned_text[start:end].strip()
 
             if len(chunk_slice) >= self.min_chunk_size:
+                ctx_text = (
+                    build_contextual_text(
+                        chunk_slice,
+                        title=meta.get("title"),
+                        section=meta.get("section"),
+                        lang=doc_lang,
+                    )
+                    if self.enable_contextual
+                    else None
+                )
                 chunks.append(
                     DocumentChunk(
                         chunk_id=f"{doc_id}__c{chunk_idx}",
@@ -118,6 +182,7 @@ class DocumentChunker:
                         char_start=start,
                         char_end=end,
                         lang=doc_lang,
+                        contextual_text=ctx_text,
                         metadata=meta,
                     )
                 )
