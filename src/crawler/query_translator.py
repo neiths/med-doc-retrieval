@@ -72,6 +72,32 @@ def load_lexicon(path: Path | str) -> dict[str, str]:
         return {}
 
 
+def load_acronyms(path: Path | str) -> dict[str, dict[str, str]]:
+    """Loads clinical acronyms dictionary from a JSON file."""
+    path = Path(path)
+    if not path.exists():
+        logger.warning(f"Acronyms file {path} not found. Using defaults.")
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        result = {}
+        for k, v in data.items():
+            k_clean = k.strip()
+            if not k_clean:
+                continue
+            if isinstance(v, dict):
+                result[k_clean] = {
+                    lang: val.strip() for lang, val in v.items() if isinstance(val, str)
+                }
+            elif isinstance(v, str):
+                result[k_clean] = {"en": v.strip()}
+        return result
+    except Exception as e:
+        logger.error(f"Failed to load acronyms from {path}: {e}")
+        return {}
+
+
 def load_stopwords(path: Path | str) -> set[str]:
     """Loads stopword list from a text file (one word/phrase per line)."""
     path = Path(path)
@@ -101,6 +127,7 @@ class QueryTranslator:
         device: str = "auto",
         lexicon_path: Path | str | None = "data/lexicon/medical_terms.json",
         zh_lexicon_path: Path | str | None = "data/lexicon/icd10_vi_zh.json",
+        acronyms_path: Path | str | None = "data/lexicon/medical_acronyms.json",
         stopwords_path: Path | str | None = "configs/pubmed_stopwords.txt",
     ):
         self.model_name = model_name
@@ -117,9 +144,10 @@ class QueryTranslator:
         self._tokenizer = None
         self._model = None
 
-        # Initialize base lexicon and stopwords
+        # Initialize base lexicon, acronyms and stopwords
         self.lexicon: dict[str, str] = dict(VI_EN_MEDICAL_LEXICON)
         self.zh_lexicon: dict[str, str] = {}
+        self.acronyms: dict[str, dict[str, str]] = {}
         self.stopwords: set[str] = set(PUBMED_STOPWORDS)
 
         if lexicon_path:
@@ -136,12 +164,20 @@ class QueryTranslator:
                 f"Loaded {len(loaded_zh)} Chinese medical terms from {zh_lexicon_path}."
             )
 
+        if acronyms_path:
+            loaded_acronyms = load_acronyms(acronyms_path)
+            self.acronyms.update(loaded_acronyms)
+            logger.debug(
+                f"Loaded {len(loaded_acronyms)} medical acronyms from {acronyms_path}."
+            )
+
         if stopwords_path:
             loaded_stopwords = load_stopwords(stopwords_path)
             self.stopwords.update(loaded_stopwords)
             logger.debug(
                 f"Loaded {len(loaded_stopwords)} stopwords from {stopwords_path}. Total: {len(self.stopwords)}"
             )
+
 
     def _load_model(self):
         """Lazy loader for sequence-to-sequence translation models (MarianMT, T5, ViT5)."""
@@ -178,16 +214,48 @@ class QueryTranslator:
             )
             return ""
 
+    def expand_acronyms(self, query: str) -> dict[str, str]:
+        """Expands clinical acronyms (e.g. HFrEF, STEMI, COPD, CURB-65, rt-PA) into VI, EN, and ZH medical terms."""
+        if not query or not self.acronyms:
+            return {"vi": "", "en": "", "zh": ""}
+
+        found_vi = []
+        found_en = []
+        found_zh = []
+        for acr, exps in self.acronyms.items():
+            if isinstance(exps, dict):
+                pattern = rf"(?i)(?:\b|_|\(){re.escape(acr)}(?:\b|_|\))"
+                if re.search(pattern, query):
+                    if exps.get("vi"):
+                        found_vi.append(exps["vi"])
+                    if exps.get("en"):
+                        found_en.append(exps["en"])
+                    if exps.get("zh"):
+                        found_zh.append(exps["zh"])
+
+        return {
+            "vi": " ".join(found_vi),
+            "en": " ".join(found_en),
+            "zh": " ".join(found_zh),
+        }
+
     def extract_pubmed_keywords(self, vi_query: str) -> str:
         """Extracts concise English keywords suitable for PubMed ESearch / Europe PMC API.
 
         Combines:
-        1. Direct domain lexicon match (sorted by length descending).
-        2. MarianMT translation with stopword filtering.
+        1. Clinical acronym expansions (HFrEF -> heart failure with reduced ejection fraction).
+        2. Direct domain lexicon match (sorted by length descending).
+        3. MarianMT translation with stopword filtering.
         """
         lexicon_terms = []
         vi_lower = vi_query.lower()
-        # Sort phrases by length descending to match compound terms first
+
+        # 1. Acronym expansion
+        acr_exp = self.expand_acronyms(vi_query)
+        if acr_exp["en"]:
+            lexicon_terms.append(acr_exp["en"])
+
+        # 2. Domain lexicon match (longest phrases first)
         sorted_phrases = sorted(self.lexicon.keys(), key=len, reverse=True)
         for vi_phrase in sorted_phrases:
             if vi_phrase in vi_lower:
@@ -221,25 +289,36 @@ class QueryTranslator:
         return " ".join(merged[:8])
 
     def extract_chinese_keywords(self, vi_query: str, max_terms: int = 5) -> str:
-        """Extracts Chinese medical keywords from a Vietnamese query using ICD-10-CN lexicon.
+        """Extracts Chinese medical keywords from a Vietnamese query using ICD-10-CN and acronym lexicon.
 
         Matches clinical entities against ICD-10-CN trilingual lexicon (longest-phrase first).
         """
-        if not vi_query or not self.zh_lexicon:
+        if not vi_query:
             return ""
 
-        vi_lower = vi_query.lower()
-        sorted_phrases = sorted(self.zh_lexicon.keys(), key=len, reverse=True)
         matched = []
         seen = set()
 
-        for phrase in sorted_phrases:
-            if phrase in vi_lower:
-                zh_term = self.zh_lexicon[phrase]
-                if zh_term not in seen:
-                    seen.add(zh_term)
-                    matched.append(zh_term)
-                if len(matched) >= max_terms:
-                    break
+        # 1. Acronym expansion for Chinese
+        acr_exp = self.expand_acronyms(vi_query)
+        if acr_exp["zh"]:
+            for term in acr_exp["zh"].split():
+                if term not in seen:
+                    seen.add(term)
+                    matched.append(term)
 
-        return " ".join(matched)
+        # 2. Lexicon matching
+        if self.zh_lexicon:
+            vi_lower = vi_query.lower()
+            sorted_phrases = sorted(self.zh_lexicon.keys(), key=len, reverse=True)
+            for phrase in sorted_phrases:
+                if phrase in vi_lower:
+                    zh_term = self.zh_lexicon[phrase]
+                    if zh_term not in seen:
+                        seen.add(zh_term)
+                        matched.append(zh_term)
+                    if len(matched) >= max_terms:
+                        break
+
+        return " ".join(matched[:max_terms])
+

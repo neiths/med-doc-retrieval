@@ -86,3 +86,23 @@ def test_extract_chinese_keywords():
     # Must contain Chinese keywords for kidney stone and urinary obstruction
     assert "肾结石" in zh_kw or "结石" in zh_kw
     assert "尿路梗阻" in zh_kw or "梗阻" in zh_kw
+
+
+def test_expand_acronyms():
+    translator = QueryTranslator(acronyms_path="data/lexicon/medical_acronyms.json")
+    query = "Điều trị bệnh nhân suy tim HFrEF giai đoạn cuối kèm STEMI"
+    exp = translator.expand_acronyms(query)
+
+    assert "suy tim phân suất tống máu giảm" in exp["vi"]
+    assert "heart failure with reduced ejection fraction" in exp["en"]
+    assert "射血分数降低的心力衰竭" in exp["zh"]
+    assert "nhồi máu cơ tim có st chênh lên" in exp["vi"]
+
+    # Verify PubMed keyword integration
+    pubmed_kw = translator.extract_pubmed_keywords("Bệnh nhân HFrEF cấp cứu").lower()
+    assert "heart" in pubmed_kw or "failure" in pubmed_kw or "hfref" in pubmed_kw
+
+    # Verify Chinese keyword integration
+    zh_kw = translator.extract_chinese_keywords("Bệnh nhân HFrEF")
+    assert "射血分数降低的心力衰竭" in zh_kw
+
