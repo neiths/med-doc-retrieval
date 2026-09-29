@@ -65,8 +65,8 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 | **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense 1024d + BGE-M3 Learned Lexical Sparse) & RRF trực tiếp ở tầng engine. |
 | **Contextual Chunking** | Đa ngôn ngữ (`vi`, `zh`, `en`) | Bổ sung tiêu đề/mục (`contextual_text`) khi tính embedding/reranking; **bảo toàn 100% chuỗi con gốc** (`chunk_text`) cho submission ($\le 1.024$ tokens theo khuyến nghị BTC). |
 | **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Trích xuất đồng thời Dense (1024 chiều) và Native Lexical Sparse vectors có trọng số học máy, đa ngôn ngữ VI-EN-ZH, $\le 14B$ tham số, phát hành trước 01/08/2026. |
-| **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ (phát hành trước 01/08/2026). |
-| **Tam ngữ Ontology & Query Expansion** | **ICD-10 Tam ngữ (VI - EN - ZH)** | Tích hợp Bộ Y tế VN (10.002 thực thể), WHO ICD-10 và ICD-10-CN (9.076 cặp ánh xạ VI-ZH). Tự động bổ sung từ khóa tiếng Trung và MeSH tiếng Anh vào truy vấn, xóa bỏ điểm mù cross-lingual lexical search. |
+| **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ; hỗ trợ **Balanced Per-Document Chunk Selection** (`max_chunks_per_doc: 2`) loại bỏ chunk đuôi dư thừa, tăng vọt Chunk Precision. |
+| **Tam ngữ Ontology & Query Expansion** | **ICD-10 & Clinical Acronyms (VI - EN - ZH)** | Tích hợp Bộ Y tế VN (10.002 thực thể), WHO ICD-10, ICD-10-CN (9.076 cặp ánh xạ VI-ZH) và từ điển từ viết tắt y khoa (STEMI, HFrEF, COPD,...). Tự động bổ sung từ khóa tiếng Trung và MeSH tiếng Anh vào truy vấn, xóa bỏ điểm mù cross-lingual lexical search. |
 | **Web Scraper Bền bỉ** | Trafilatura + BeautifulSoup + Async Checkpoint | Cơ chế Resumable Checkpointing (ghi tăng dần từng dòng, tự động phục hồi khi mạng gián đoạn), 429 rate limit backoff và bộ lọc chống quảng cáo/nhiễu. |
 | **External Medical API** | PubTator 3.0, Europe PMC & NCBI Entrez | Tìm kiếm bài báo PubMed theo từ khóa, tải BiocJSON/XML và lưu cache tự động tại `pubmed_cache.jsonl`. |
 | **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. Đánh giá chunk theo cơ chế overlap/containment. |
@@ -86,7 +86,8 @@ med-doc-retrieval/
 │   │   ├── icd10_ontology.json # Cây phân loại bệnh học tam ngữ VI-EN-ZH (10.002 thực thể)
 │   │   ├── icd10_vi_zh.json    # Từ điển thực thể bệnh lý VI -> ZH (9.076 thực thể)
 │   │   ├── icd10_vi_en.json    # Từ điển thực thể bệnh lý VI -> EN (9.365 thực thể)
-│   │   └── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (9.440 thuật ngữ lâm sàng)
+│   │   ├── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (9.440 thuật ngữ lâm sàng)
+│   │   └── medical_acronyms.json # Từ điển từ viết tắt y khoa lâm sàng tam ngữ VI-EN-ZH (STEMI, HFrEF, COPD,...)
 │   ├── mock/                   # Bộ dữ liệu mock validation đa ngôn ngữ phục vụ benchmark
 │   │   ├── articles_all.jsonl  # 29 bài viết mẫu (VI, ZH, EN có PMID, distractors)
 │   │   ├── queries_val.jsonl   # 8 câu hỏi kiểm định thực tế
@@ -166,7 +167,7 @@ uv run python scripts/preload_models.py
 
 ### Bước 3: Chạy kiểm thử tự động
 ```bash
-# Đảm bảo toàn bộ 34 bài kiểm thử đều PASS
+# Đảm bảo toàn bộ 35 bài kiểm thử đều PASS
 uv run pytest
 ```
 
@@ -178,15 +179,15 @@ uv run python scripts/run_mock_eval.py
 
 **Bảng so sánh hiệu năng thực tế trên tập Mock Validation:**
 
-| Cấp độ đánh giá | Chỉ số | Baseline (Trước Contextual) | **Hiện tại (Contextual + Tam ngữ ICD-10 + BGE-M3 Sparse)** | Mức cải thiện |
+| Cấp độ đánh giá | Chỉ số | Baseline (Trước Contextual) | **Hiện tại (Contextual + Tam ngữ + Balanced Rerank + Acronyms)** | Mức cải thiện |
 | :--- | :--- | :---: | :---: | :---: |
 | **Document Level** | Precision | 63.66% | **82.71%** | <font color="green">**+19.05%**</font> |
 | | Recall | 91.67% | **95.83%** | <font color="green">**+4.16%**</font> |
 | | **Macro F2** | 0.8235 | **0.9211** | <font color="green">**+9.76%**</font> |
-| **Chunk Level** | Precision | 41.74% | **56.67%** | <font color="green">**+14.93%**</font> |
+| **Chunk Level** | Precision | 41.74% | **57.19%** | <font color="green">**+15.45%**</font> |
 | | Recall | 100.0% | **95.83%** | *(Duy trì mức rất cao)* |
-| | **Macro F2** | 0.7557 | **0.8307** | <font color="green">**+7.50%**</font> |
-| **Combined Score** | **Macro F2** | **0.7896** | **0.8759** | <font color="green">**+8.63% (Vững chắc)**</font> |
+| | **Macro F2** | 0.7557 | **0.8352** | <font color="green">**+7.95%**</font> |
+| **Combined Score** | **Macro F2** | **0.7896** | **0.8781** | <font color="green">**+8.85% (Tối ưu)**</font> |
 
 ### Bước 5: Benchmark VRAM trên GPU
 ```bash
