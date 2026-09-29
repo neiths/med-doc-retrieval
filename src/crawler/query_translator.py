@@ -100,6 +100,7 @@ class QueryTranslator:
         prompt_prefix: str = "",
         device: str = "auto",
         lexicon_path: Path | str | None = "data/lexicon/medical_terms.json",
+        zh_lexicon_path: Path | str | None = "data/lexicon/icd10_vi_zh.json",
         stopwords_path: Path | str | None = "configs/pubmed_stopwords.txt",
     ):
         self.model_name = model_name
@@ -118,6 +119,7 @@ class QueryTranslator:
 
         # Initialize base lexicon and stopwords
         self.lexicon: dict[str, str] = dict(VI_EN_MEDICAL_LEXICON)
+        self.zh_lexicon: dict[str, str] = {}
         self.stopwords: set[str] = set(PUBMED_STOPWORDS)
 
         if lexicon_path:
@@ -125,6 +127,13 @@ class QueryTranslator:
             self.lexicon.update(loaded_lexicon)
             logger.debug(
                 f"Loaded {len(loaded_lexicon)} terms from {lexicon_path}. Total: {len(self.lexicon)}"
+            )
+
+        if zh_lexicon_path:
+            loaded_zh = load_lexicon(zh_lexicon_path)
+            self.zh_lexicon.update(loaded_zh)
+            logger.debug(
+                f"Loaded {len(loaded_zh)} Chinese medical terms from {zh_lexicon_path}."
             )
 
         if stopwords_path:
@@ -210,3 +219,27 @@ class QueryTranslator:
             return translated or vi_query
 
         return " ".join(merged[:8])
+
+    def extract_chinese_keywords(self, vi_query: str, max_terms: int = 5) -> str:
+        """Extracts Chinese medical keywords from a Vietnamese query using ICD-10-CN lexicon.
+
+        Matches clinical entities against ICD-10-CN trilingual lexicon (longest-phrase first).
+        """
+        if not vi_query or not self.zh_lexicon:
+            return ""
+
+        vi_lower = vi_query.lower()
+        sorted_phrases = sorted(self.zh_lexicon.keys(), key=len, reverse=True)
+        matched = []
+        seen = set()
+
+        for phrase in sorted_phrases:
+            if phrase in vi_lower:
+                zh_term = self.zh_lexicon[phrase]
+                if zh_term not in seen:
+                    seen.add(zh_term)
+                    matched.append(zh_term)
+                if len(matched) >= max_terms:
+                    break
+
+        return " ".join(matched)

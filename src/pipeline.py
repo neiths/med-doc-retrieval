@@ -56,6 +56,9 @@ class MedicalRetrievalPipeline:
                 prompt_prefix=getattr(self.config.query_translation, "prompt_prefix", ""),
                 device=self.config.query_translation.device,
                 lexicon_path=self.config.query_translation.lexicon_path,
+                zh_lexicon_path=getattr(
+                    self.config.query_translation, "zh_lexicon_path", "data/lexicon/icd10_vi_zh.json"
+                ),
                 stopwords_path=self.config.query_translation.stopwords_path,
             )
 
@@ -182,7 +185,14 @@ class MedicalRetrievalPipeline:
                 )
 
         # 1. Embed query (dense + native lexical sparse)
-        q_dense, q_sparse = self.embedder.encode_both([query])
+        query_text_for_search = query
+        if self.translator:
+            zh_kw = self.translator.extract_chinese_keywords(query)
+            if zh_kw:
+                query_text_for_search = f"{query} {zh_kw}"
+                logger.debug(f"Enriched query with Chinese terms: '{query_text_for_search}'")
+
+        q_dense, q_sparse = self.embedder.encode_both([query_text_for_search])
         q_emb = q_dense[0]
         q_sparse_dict = q_sparse[0] if q_sparse else None
 
@@ -191,7 +201,7 @@ class MedicalRetrievalPipeline:
         if self.config.retrieval.engine == "qdrant" and self.qdrant_index is not None:
             if self.qdrant_index.count() > 0:
                 local_candidates = self.qdrant_index.search(
-                    query_text=query,
+                    query_text=query_text_for_search,
                     query_embedding=q_emb,
                     query_sparse=q_sparse_dict,
                     top_k=self.config.retrieval.hybrid_top_k,

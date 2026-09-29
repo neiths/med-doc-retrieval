@@ -71,6 +71,7 @@ class QueryTranslationConfig(BaseModel):
     prompt_prefix: str = ""
     device: str = "auto"
     lexicon_path: Path | None = Path("data/lexicon/medical_terms.json")
+    zh_lexicon_path: Path | None = Path("data/lexicon/icd10_vi_zh.json")
     stopwords_path: Path | None = Path("configs/pubmed_stopwords.txt")
 
 
