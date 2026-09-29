@@ -62,11 +62,12 @@ Hệ thống được thiết kế để giải quyết bài toán "khoảng cá
 | Thành phần | Công nghệ / Mô hình | Đáp ứng Quy chế (Rules & Constraints) |
 | :--- | :--- | :--- |
 | **Quản lý Môi trường** | `uv` + Python 3.11 | Tối ưu hóa cài đặt cực nhanh, đồng bộ 100% qua `uv.lock`. |
-| **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense + Sparse) & RRF trực tiếp ở tầng engine. |
-| **Contextual Chunking** | Đa ngôn ngữ (`vi`, `zh`, `en`) | Bổ sung tiêu đề/mục (`contextual_text`) khi tính embedding/reranking; **bảo toàn 100% chuỗi con gốc** (`chunk_text`) cho submission. |
-| **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Đa ngôn ngữ VI-EN-ZH, 1024 chiều, $\le 14B$ tham số (dung sai $\le 15B$, tính riêng từng model), phát hành trước 01/08/2026. |
+| **Vector Database** | **Qdrant (Local Embedded)** | Lưu trữ nhúng tại `data/indices/qdrant_db`, **không cần Docker**, hỗ trợ Native Hybrid Search (Dense 1024d + BGE-M3 Learned Lexical Sparse) & RRF trực tiếp ở tầng engine. |
+| **Contextual Chunking** | Đa ngôn ngữ (`vi`, `zh`, `en`) | Bổ sung tiêu đề/mục (`contextual_text`) khi tính embedding/reranking; **bảo toàn 100% chuỗi con gốc** (`chunk_text`) cho submission ($\le 1.024$ tokens theo khuyến nghị BTC). |
+| **Embedding Model** | `BAAI/bge-m3` (chế độ **FP16**) | Trích xuất đồng thời Dense (1024 chiều) và Native Lexical Sparse vectors có trọng số học máy, đa ngôn ngữ VI-EN-ZH, $\le 14B$ tham số, phát hành trước 01/08/2026. |
 | **Re-ranker** | `BAAI/bge-reranker-large` (chế độ **FP16**) | Cross-Encoder chấm điểm tương quan ngữ nghĩa trực tiếp giữa câu hỏi VI và contextual chunk đa ngôn ngữ (phát hành trước 01/08/2026). |
-| **Query Translator** | `Helsinki-NLP/opus-mt-vi-en` / `ndhieu1101` + ICD-10 Ontology | Mô hình dịch y khoa kết hợp từ điển song ngữ chuẩn hóa Bộ Y tế Việt Nam & WHO (>10.000 thực thể bệnh lý, 9.440 thuật ngữ). |
+| **Tam ngữ Ontology & Query Expansion** | **ICD-10 Tam ngữ (VI - EN - ZH)** | Tích hợp Bộ Y tế VN (10.002 thực thể), WHO ICD-10 và ICD-10-CN (9.076 cặp ánh xạ VI-ZH). Tự động bổ sung từ khóa tiếng Trung và MeSH tiếng Anh vào truy vấn, xóa bỏ điểm mù cross-lingual lexical search. |
+| **Web Scraper Bền bỉ** | Trafilatura + BeautifulSoup + Async Checkpoint | Cơ chế Resumable Checkpointing (ghi tăng dần từng dòng, tự động phục hồi khi mạng gián đoạn), 429 rate limit backoff và bộ lọc chống quảng cáo/nhiễu. |
 | **External Medical API** | PubTator 3.0, Europe PMC & NCBI Entrez | Tìm kiếm bài báo PubMed theo từ khóa, tải BiocJSON/XML và lưu cache tự động tại `pubmed_cache.jsonl`. |
 | **Độ đo đánh giá** | Macro F2 (beta = 2.0) | Ưu tiên Recall gấp 2 lần Precision theo đúng công thức BTC. Đánh giá chunk theo cơ chế overlap/containment. |
 
@@ -81,8 +82,10 @@ med-doc-retrieval/
 │   └── pubmed_stopwords.txt    # Danh sách stopwords / filler words khi tìm kiếm y sinh PubMed
 ├── data/
 │   ├── lexicon/
-│   │   ├── icd10_ontology.json # Cây phân loại bệnh học song ngữ chính thức Bộ Y tế & WHO (10.002 thực thể)
-│   │   ├── icd10_vi_en.json    # Từ điển ánh xạ thực thể bệnh lý VI -> EN phục vụ retrieval
+│   │   ├── icd10_cn/           # Dữ liệu ICD-10 Trung Quốc gốc (disease.csv, disease_catalog.csv)
+│   │   ├── icd10_ontology.json # Cây phân loại bệnh học tam ngữ VI-EN-ZH (10.002 thực thể)
+│   │   ├── icd10_vi_zh.json    # Từ điển thực thể bệnh lý VI -> ZH (9.076 thực thể)
+│   │   ├── icd10_vi_en.json    # Từ điển thực thể bệnh lý VI -> EN (9.365 thực thể)
 │   │   └── medical_terms.json  # Từ điển y khoa song ngữ VI-EN mở rộng (9.440 thuật ngữ lâm sàng)
 │   ├── mock/                   # Bộ dữ liệu mock validation đa ngôn ngữ phục vụ benchmark
 │   │   ├── articles_all.jsonl  # 29 bài viết mẫu (VI, ZH, EN có PMID, distractors)
@@ -94,16 +97,16 @@ med-doc-retrieval/
 ├── src/
 │   ├── config.py               # Pydantic schema quản lý cấu hình hệ thống
 │   ├── crawler/                # Thu thập dữ liệu đa ngôn ngữ
-│   │   ├── url_scraper.py      # Async scraper cho URLs bài viết VI và ZH (Trafilatura)
+│   │   ├── url_scraper.py      # Async scraper resumable checkpointing cho URLs VI và ZH
 │   │   ├── pubmed.py           # Client tra cứu PubTator 3.0 / Europe PMC / NCBI (có disk cache)
-│   │   └── query_translator.py # Bộ dịch MarianMT & trích xuất từ khóa y khoa VI -> EN
+│   │   └── query_translator.py # Bộ trích xuất từ khóa y khoa VI -> EN & VI -> ZH (ICD-10)
 │   ├── ingestion/              # Tiền xử lý & phân đoạn
 │   │   ├── cleaner.py          # Chuẩn hóa Unicode NFC & lọc ngôn ngữ
 │   │   └── chunker.py          # Phân đoạn Contextual Chunking & bảo toàn nguyên vẹn chuỗi con
 │   ├── embedding/              # Vector hóa
-│   │   └── bge_m3.py           # BGE-M3 Embedder (hỗ trợ FP16, tối ưu VRAM)
+│   │   └── bge_m3.py           # BGE-M3 Embedder (FP16, Dense + Learned Lexical Sparse)
 │   ├── retrieval/              # Tìm kiếm lai (Hybrid Search)
-│   │   ├── qdrant_index.py     # Qdrant Local Engine (Native Dense + Sparse + RRF)
+│   │   ├── qdrant_index.py     # Qdrant Local Engine (Native Dense + BGE-M3 Sparse + RRF)
 │   │   ├── dense_index.py      # FAISS Dense Index (dự phòng)
 │   │   ├── sparse_index.py     # BM25 Sparse Index (Jieba & PyVi tokenization)
 │   │   └── hybrid.py           # Reciprocal Rank Fusion kết hợp
@@ -118,10 +121,11 @@ med-doc-retrieval/
 │   └── 01_baseline_exploration.ipynb # Notebook mẫu thử nghiệm từng thành phần
 ├── scripts/
 │   ├── collect_icd10_ontology.py # Thu thập tự động cây ICD-10 Bộ Y tế & ánh xạ WHO
-│   ├── preload_models.py       # Tải trước và kiểm tra toàn bộ weights model cho offline inference
+│   ├── integrate_icd10_cn.py   # Tích hợp ICD-10-CN xây dựng từ điển tam ngữ VI-EN-ZH
+│   ├── preload_models.py       # Tải trước và warm-up toàn bộ weights model cho offline inference
 │   ├── run_mock_eval.py        # Benchmark đánh giá Macro F2 end-to-end trên tập mock validation
 │   └── test_gpu_memory.py      # Script stress test VRAM trên GPU (RTX 3050 6GB)
-├── tests/                      # Bộ kiểm thử tự động (32/32 tests passing)
+├── tests/                      # Bộ kiểm thử tự động (34/34 tests passing)
 │   ├── test_chunker.py
 │   ├── test_icd10_ontology.py
 │   ├── test_metrics.py
@@ -154,31 +158,37 @@ uv sync --extra dev
 source .venv/bin/activate
 ```
 
-### Bước 2: Chạy kiểm thử tự động
+### Bước 2: Nạp trước Models để chạy 100% Offline
 ```bash
-# Đảm bảo toàn bộ 25 bài kiểm thử đều PASS
+# Tải trước và warm-up weights BGE-M3, BGE-Reranker, Translator để tránh rate limit
+uv run python scripts/preload_models.py
+```
+
+### Bước 3: Chạy kiểm thử tự động
+```bash
+# Đảm bảo toàn bộ 34 bài kiểm thử đều PASS
 uv run pytest
 ```
 
-### Bước 3: Đánh giá Benchmark Macro F2 trên Mock Validation
+### Bước 4: Đánh giá Benchmark Macro F2 trên Mock Validation
 ```bash
-# Chạy đánh giá toàn diện chu trình Ingestion -> Qdrant Hybrid -> Reranker
+# Chạy đánh giá toàn diện chu trình Ingestion -> Qdrant Hybrid (Dense + BGE-M3 Sparse) -> Reranker
 uv run python scripts/run_mock_eval.py
 ```
 
 **Bảng so sánh hiệu năng thực tế trên tập Mock Validation:**
 
-| Cấp độ đánh giá | Chỉ số | Baseline (Trước Contextual) | **Sau Contextual Chunking** | Mức cải thiện |
+| Cấp độ đánh giá | Chỉ số | Baseline (Trước Contextual) | **Hiện tại (Contextual + Tam ngữ ICD-10 + BGE-M3 Sparse)** | Mức cải thiện |
 | :--- | :--- | :---: | :---: | :---: |
 | **Document Level** | Precision | 63.66% | **82.71%** | <font color="green">**+19.05%**</font> |
 | | Recall | 91.67% | **95.83%** | <font color="green">**+4.16%**</font> |
 | | **Macro F2** | 0.8235 | **0.9211** | <font color="green">**+9.76%**</font> |
-| **Chunk Level** | Precision | 41.74% | **57.92%** | <font color="green">**+16.18%**</font> |
+| **Chunk Level** | Precision | 41.74% | **56.67%** | <font color="green">**+14.93%**</font> |
 | | Recall | 100.0% | **95.83%** | *(Duy trì mức rất cao)* |
-| | **Macro F2** | 0.7557 | **0.8368** | <font color="green">**+8.11%**</font> |
-| **Combined Score** | **Macro F2** | **0.7896** | **0.8790** | <font color="green">**+8.94% (Đột phá)**</font> |
+| | **Macro F2** | 0.7557 | **0.8307** | <font color="green">**+7.50%**</font> |
+| **Combined Score** | **Macro F2** | **0.7896** | **0.8759** | <font color="green">**+8.63% (Vững chắc)**</font> |
 
-### Bước 4: Benchmark VRAM trên GPU
+### Bước 5: Benchmark VRAM trên GPU
 ```bash
 # Kiểm tra bộ nhớ VRAM với BGE-M3 và BGE-Reranker (FP16)
 uv run python scripts/test_gpu_memory.py
@@ -192,9 +202,9 @@ uv run python scripts/test_gpu_memory.py
 
 Hệ thống cung cấp giao diện dòng lệnh đồng nhất qua `main.py`:
 
-### 1. Thu thập dữ liệu từ URL (Tiếng Việt & Tiếng Trung)
+### 1. Thu thập dữ liệu từ URL (Tiếng Việt & Tiếng Trung, hỗ trợ Checkpoint Resume)
 ```bash
-python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 10
+python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 15 --resume
 ```
 
 ### 2. Thu thập dữ liệu tiếng Anh từ PubMed (Ngoại tuyến)
