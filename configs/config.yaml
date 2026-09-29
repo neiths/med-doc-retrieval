@@ -29,6 +29,7 @@ embedding:
   normalize_embeddings: true
   device: "auto"            # "cuda", "cpu", or "auto"
   use_fp16: true            # Saves ~50% VRAM (fits in 6GB GPU)
+  return_sparse: true       # Generate BGE-M3 native lexical sparse weights for Qdrant
 
 retrieval:
   engine: "qdrant"          # "qdrant" (embedded local storage) or "faiss"

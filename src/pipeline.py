@@ -128,9 +128,9 @@ class MedicalRetrievalPipeline:
         logger.info(f"Saved chunk metadata to {chunks_file}")
 
         # 3. Dense & Sparse Indexing
-        logger.info("Computing dense embeddings with BGE-M3...")
+        logger.info("Computing BGE-M3 dense and native lexical sparse embeddings...")
         chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in all_chunks]
-        embeddings = self.embedder.encode(chunk_texts, show_progress_bar=True)
+        embeddings, sparse_weights = self.embedder.encode_both(chunk_texts, show_progress_bar=True)
 
         if self.config.retrieval.engine == "qdrant":
             logger.info(f"Indexing {len(all_chunks)} chunks into Qdrant Local Engine...")
@@ -140,7 +140,7 @@ class MedicalRetrievalPipeline:
                     collection_name=self.config.retrieval.collection_name,
                     dimension=embeddings.shape[1],
                 )
-            self.qdrant_index.add_chunks(all_chunks, embeddings)
+            self.qdrant_index.add_chunks(all_chunks, embeddings, sparse_weights=sparse_weights)
             logger.info(
                 f"Qdrant collection '{self.config.retrieval.collection_name}' ready with {self.qdrant_index.count()} chunks."
             )
@@ -181,8 +181,10 @@ class MedicalRetrievalPipeline:
                     f"Could not load pre-built local indices ({e}). Proceeding with PubMed only if enabled."
                 )
 
-        # 1. Embed query
-        q_emb = self.embedder.encode([query])[0]
+        # 1. Embed query (dense + native lexical sparse)
+        q_dense, q_sparse = self.embedder.encode_both([query])
+        q_emb = q_dense[0]
+        q_sparse_dict = q_sparse[0] if q_sparse else None
 
         # 2. Local Hybrid Search (VI & ZH from pre-built indices)
         local_candidates: list[dict[str, Any]] = []
@@ -191,6 +193,7 @@ class MedicalRetrievalPipeline:
                 local_candidates = self.qdrant_index.search(
                     query_text=query,
                     query_embedding=q_emb,
+                    query_sparse=q_sparse_dict,
                     top_k=self.config.retrieval.hybrid_top_k,
                 )
         elif self.hybrid_retriever is not None:

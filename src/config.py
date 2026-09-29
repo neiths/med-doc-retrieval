@@ -38,6 +38,7 @@ class EmbeddingConfig(BaseModel):
     normalize_embeddings: bool = True
     device: str = "auto"
     use_fp16: bool = True
+    return_sparse: bool = True
 
 
 class RetrievalConfig(BaseModel):

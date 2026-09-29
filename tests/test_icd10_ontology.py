@@ -5,7 +5,6 @@ from scripts.collect_icd10_ontology import (
     clean_english_phrase,
     clean_vietnamese_phrase,
     enrich_medical_terms_lexicon,
-    load_who_icd10,
     match_and_build_lexicon,
 )
 
