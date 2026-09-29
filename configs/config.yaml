@@ -48,10 +48,10 @@ reranker:
   model_name: "BAAI/bge-reranker-large"
   batch_size: 16
   device: "auto"
-  use_fp16: true            # Saves ~50% VRAM
-  top_k_chunks: 10          # Number of chunks to select per query
+  top_k_chunks: 10          # Maximum number of chunks to select per query
   top_k_docs: 5             # Maximum distinct documents to select per query
   score_threshold: -5.0     # Minimum cross-encoder logit score filter
+  max_chunks_per_doc: 2     # Maximum chunks selected per document to eliminate tail redundancy
 
 query_translation:
   enabled: true

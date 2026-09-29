@@ -63,6 +63,7 @@ class RerankerConfig(BaseModel):
     top_k_chunks: int = 10
     top_k_docs: int = 5
     score_threshold: float = -5.0
+    max_chunks_per_doc: int = 2
 
 
 class QueryTranslationConfig(BaseModel):

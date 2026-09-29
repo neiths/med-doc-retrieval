@@ -77,8 +77,15 @@ class BGEReranker:
         top_k_chunks: int = 10,
         top_k_docs: int = 5,
         score_threshold: float = -5.0,
+        max_chunks_per_doc: int = 2,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Reranks candidate chunks and extracts top relevant documents and chunks.
+
+        Guarantees:
+        1. Document-level ranking: top_k_docs distinct documents selected by highest chunk score.
+        2. Balanced chunk selection: at most max_chunks_per_doc chunks per document to eliminate
+           redundant tail chunks and maximize chunk precision while preserving full recall.
+        3. Mutual consistency: every chunk returned strictly belongs to a document in doc_ids.
 
         Args:
             query: User search query in Vietnamese.
@@ -86,6 +93,7 @@ class BGEReranker:
             top_k_chunks: Max chunks to select.
             top_k_docs: Max unique documents to select.
             score_threshold: Minimum cross-encoder score filter.
+            max_chunks_per_doc: Maximum number of chunks allowed per document.
 
         Returns:
             Tuple of (list of doc_ids, list of chunk dicts {"doc_id": ..., "chunk_text": ...})
@@ -101,14 +109,15 @@ class BGEReranker:
 
         # Filter and sort by rerank_score descending
         valid_candidates = [c for c in candidates if c.get("rerank_score", -999) >= score_threshold]
+        if not valid_candidates:
+            return [], []
+
         valid_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
 
-        selected_chunks = valid_candidates[:top_k_chunks]
-
-        # Extract unique documents preserving order of highest chunk score
+        # 1. Extract unique documents preserving order of highest chunk score up to top_k_docs
         doc_ids = []
         seen_docs = set()
-        for c in selected_chunks:
+        for c in valid_candidates:
             did = str(c["doc_id"])
             if did not in seen_docs:
                 seen_docs.add(did)
@@ -116,8 +125,19 @@ class BGEReranker:
             if len(doc_ids) >= top_k_docs:
                 break
 
-        formatted_chunks = [
-            {"doc_id": str(c["doc_id"]), "chunk_text": c["chunk_text"]} for c in selected_chunks
-        ]
+        # 2. Select top chunks per document (up to max_chunks_per_doc each)
+        selected_doc_set = set(doc_ids)
+        formatted_chunks = []
+        doc_chunk_count: dict[str, int] = {}
+        for c in valid_candidates:
+            did = str(c["doc_id"])
+            if did in selected_doc_set:
+                cnt = doc_chunk_count.get(did, 0)
+                if cnt < max_chunks_per_doc:
+                    formatted_chunks.append({"doc_id": did, "chunk_text": c["chunk_text"]})
+                    doc_chunk_count[did] = cnt + 1
+            if len(formatted_chunks) >= top_k_chunks:
+                break
 
         return doc_ids, formatted_chunks
+
