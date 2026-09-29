@@ -13,6 +13,30 @@ from qdrant_client import QdrantClient, models
 from src.retrieval.sparse_index import tokenize_multilingual
 
 
+def lexical_weights_to_sparse_vector(weights: dict[str | int, float]) -> models.SparseVector:
+    """Converts BGE-M3 lexical weights dictionary to Qdrant models.SparseVector.
+
+    BGE-M3 lexical head outputs {token_id: weight}.
+    Token IDs are non-negative integers (0 to ~250,000 for XLM-RoBERTa),
+    which directly map to Qdrant sparse vector indices.
+    """
+    if not weights:
+        return models.SparseVector(indices=[], values=[])
+
+    indices = []
+    values = []
+    for k, v in weights.items():
+        if isinstance(k, str) and not k.isdigit():
+            token_hash = hashlib.md5(k.encode("utf-8")).hexdigest()[:8]
+            idx = int(token_hash, 16) % (2**31 - 1)
+        else:
+            idx = int(k)
+        indices.append(idx)
+        values.append(float(v))
+
+    return models.SparseVector(indices=indices, values=values)
+
+
 def text_to_sparse_vector(text: str, lang: str = "auto") -> models.SparseVector:
     """Converts multilingual text into a deterministic sparse term-frequency vector."""
     tokens = tokenize_multilingual(text, lang=lang)
@@ -76,9 +100,10 @@ class QdrantLocalIndex:
         self,
         chunks: list[dict[str, Any]],
         embeddings: np.ndarray,
+        sparse_weights: list[dict[str | int, float]] | list[models.SparseVector] | None = None,
         batch_size: int = 256,
     ):
-        """Indexes chunks with both dense embeddings and sparse term-frequency vectors."""
+        """Indexes chunks with dense embeddings and native lexical sparse vectors."""
         if len(chunks) != len(embeddings):
             raise ValueError("Number of chunks must match number of embeddings.")
 
@@ -88,18 +113,31 @@ class QdrantLocalIndex:
         for i in range(0, total, batch_size):
             batch_chunks = chunks[i : i + batch_size]
             batch_embeddings = embeddings[i : i + batch_size]
+            batch_sparse = sparse_weights[i : i + batch_size] if sparse_weights is not None else None
 
             points = []
-            for chunk, emb in zip(batch_chunks, batch_embeddings):
+            for j, (chunk, emb) in enumerate(zip(batch_chunks, batch_embeddings)):
                 chunk_id = str(chunk.get("chunk_id", ""))
                 # Deterministic UUID from chunk_id
                 point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 
-                sparse_text = chunk.get("contextual_text") or chunk.get("chunk_text", "")
-                sparse_vec = text_to_sparse_vector(
-                    text=sparse_text,
-                    lang=chunk.get("lang", "auto"),
-                )
+                if batch_sparse is not None and j < len(batch_sparse):
+                    sp = batch_sparse[j]
+                    if isinstance(sp, models.SparseVector):
+                        sparse_vec = sp
+                    elif isinstance(sp, dict):
+                        sparse_vec = lexical_weights_to_sparse_vector(sp)
+                    else:
+                        sparse_vec = text_to_sparse_vector(
+                            text=chunk.get("contextual_text") or chunk.get("chunk_text", ""),
+                            lang=chunk.get("lang", "auto"),
+                        )
+                else:
+                    sparse_text = chunk.get("contextual_text") or chunk.get("chunk_text", "")
+                    sparse_vec = text_to_sparse_vector(
+                        text=sparse_text,
+                        lang=chunk.get("lang", "auto"),
+                    )
 
                 point = models.PointStruct(
                     id=point_id,
@@ -130,6 +168,7 @@ class QdrantLocalIndex:
         self,
         query_text: str,
         query_embedding: np.ndarray,
+        query_sparse: models.SparseVector | dict[str | int, float] | None = None,
         top_k: int = 50,
         lang_filter: str | None = None,
     ) -> list[dict[str, Any]]:
@@ -144,7 +183,15 @@ class QdrantLocalIndex:
         else:
             q_vec = query_embedding.tolist()
 
-        sparse_query = text_to_sparse_vector(query_text, lang="auto")
+        if query_sparse is not None:
+            if isinstance(query_sparse, models.SparseVector):
+                sparse_query = query_sparse
+            elif isinstance(query_sparse, dict):
+                sparse_query = lexical_weights_to_sparse_vector(query_sparse)
+            else:
+                sparse_query = text_to_sparse_vector(query_text, lang="auto")
+        else:
+            sparse_query = text_to_sparse_vector(query_text, lang="auto")
 
         # Optional payload filtering (e.g. by language or source)
         query_filter = None

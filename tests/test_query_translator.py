@@ -75,3 +75,14 @@ def test_prompt_prefix_auto_detection():
     # Explicit override
     tr_custom = QueryTranslator(model_name="google/mt5-base", prompt_prefix="translate: ")
     assert tr_custom.prompt_prefix == "translate: "
+
+
+def test_extract_chinese_keywords():
+    translator = QueryTranslator(zh_lexicon_path="data/lexicon/icd10_vi_zh.json")
+    query = "Điều trị bệnh nhân bị tắc nghẽn đường tiết niệu do sỏi thận"
+    zh_kw = translator.extract_chinese_keywords(query)
+
+    assert len(zh_kw) > 0
+    # Must contain Chinese keywords for kidney stone and urinary obstruction
+    assert "肾结石" in zh_kw or "结石" in zh_kw
+    assert "尿路梗阻" in zh_kw or "梗阻" in zh_kw

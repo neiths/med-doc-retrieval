@@ -31,6 +31,7 @@ def crawl_urls(
         Path("data/processed/crawled_articles.jsonl"), "--output", "-o", help="Output JSONL"
     ),
     concurrency: int = typer.Option(10, "--concurrency", "-c", help="Concurrent request limit"),
+    resume: bool = typer.Option(True, "--resume/--no-resume", help="Resume from existing output if present"),
 ):
     """Crawls articles from Vietnamese and Chinese URLs provided by competition organizers."""
     config = load_config()
@@ -40,8 +41,8 @@ def crawl_urls(
         max_retries=config.crawler.max_retries,
         concurrency=concurrency,
     )
-    console.print(f"[bold green]Starting web scraper on {input_file}...[/bold green]")
-    asyncio.run(scraper.scrape_urls_jsonl(input_file=input_file, output_file=output_file))
+    console.print(f"[bold green]Starting web scraper on {input_file} (resume={resume})...[/bold green]")
+    asyncio.run(scraper.scrape_urls_jsonl(input_file=input_file, output_file=output_file, resume=resume))
     console.print(f"[bold green]Crawled articles saved to {output_file}[/bold green]")
 
 
