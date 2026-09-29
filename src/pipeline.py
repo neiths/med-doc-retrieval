@@ -187,10 +187,16 @@ class MedicalRetrievalPipeline:
         # 1. Embed query (dense + native lexical sparse)
         query_text_for_search = query
         if self.translator:
+            parts = [query]
+            acr_exp = self.translator.expand_acronyms(query)
+            if acr_exp.get("vi"):
+                parts.append(acr_exp["vi"])
             zh_kw = self.translator.extract_chinese_keywords(query)
             if zh_kw:
-                query_text_for_search = f"{query} {zh_kw}"
-                logger.debug(f"Enriched query with Chinese terms: '{query_text_for_search}'")
+                parts.append(zh_kw)
+            if len(parts) > 1:
+                query_text_for_search = " ".join(parts)
+                logger.debug(f"Enriched query for search: '{query_text_for_search}'")
 
         q_dense, q_sparse = self.embedder.encode_both([query_text_for_search])
         q_emb = q_dense[0]
@@ -246,7 +252,6 @@ class MedicalRetrievalPipeline:
             logger.warning(f"No candidate documents found for query: '{query}'")
             return {"relevant_docs": [], "relevant_chunks": []}
 
-        # 5. Rerank candidates across all languages using Cross-Encoder
         if self.reranker and self.config.reranker.enabled:
             doc_ids, relevant_chunks = self.reranker.rerank(
                 query=query,
@@ -254,7 +259,9 @@ class MedicalRetrievalPipeline:
                 top_k_chunks=self.config.reranker.top_k_chunks,
                 top_k_docs=self.config.reranker.top_k_docs,
                 score_threshold=self.config.reranker.score_threshold,
+                max_chunks_per_doc=getattr(self.config.reranker, "max_chunks_per_doc", 2),
             )
+
         else:
             seen_docs = set()
             doc_ids = []

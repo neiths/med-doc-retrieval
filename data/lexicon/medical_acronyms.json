@@ -1,0 +1,217 @@
+{
+  "STEMI": {
+    "vi": "nhồi máu cơ tim có st chênh lên",
+    "en": "ST-elevation myocardial infarction STEMI",
+    "zh": "ST段抬高型心肌梗死"
+  },
+  "NSTEMI": {
+    "vi": "nhồi máu cơ tim không có st chênh lên",
+    "en": "non-ST-elevation myocardial infarction NSTEMI",
+    "zh": "非ST段抬高型心肌梗死"
+  },
+  "HFrEF": {
+    "vi": "suy tim phân suất tống máu giảm",
+    "en": "heart failure with reduced ejection fraction HFrEF",
+    "zh": "射血分数降低的心力衰竭"
+  },
+  "HFpEF": {
+    "vi": "suy tim phân suất tống máu bảo tồn",
+    "en": "heart failure with preserved ejection fraction HFpEF",
+    "zh": "射血分数保留的心力衰竭"
+  },
+  "COPD": {
+    "vi": "bệnh phổi tắc nghẽn mạn tính",
+    "en": "chronic obstructive pulmonary disease COPD",
+    "zh": "慢性阻塞性肺疾病"
+  },
+  "CURB-65": {
+    "vi": "thang điểm curb-65 viêm phổi cộng đồng",
+    "en": "CURB-65 score community-acquired pneumonia severity",
+    "zh": "CURB-65评分"
+  },
+  "ESWL": {
+    "vi": "tán sỏi ngoài cơ thể",
+    "en": "extracorporeal shock wave lithotripsy ESWL",
+    "zh": "体外冲击波碎石术"
+  },
+  "PCNL": {
+    "vi": "tán sỏi qua da",
+    "en": "percutaneous nephrolithotomy PCNL",
+    "zh": "经皮肾镜碎石术"
+  },
+  "rt-PA": {
+    "vi": "thuốc tiêu sợi huyết alteplase",
+    "en": "recombinant tissue plasminogen activator alteplase rt-PA",
+    "zh": "阿替普酶 重组组织型纤溶酶原激活剂"
+  },
+  "DKA": {
+    "vi": "nhiễm toan ceton đái tháo đường",
+    "en": "diabetic ketoacidosis DKA",
+    "zh": "糖尿病酮症酸中毒"
+  },
+  "ARDS": {
+    "vi": "hội chứng suy hô hấp cấp tiến triển",
+    "en": "acute respiratory distress syndrome ARDS",
+    "zh": "急性呼吸窘迫综合征"
+  },
+  "CKD": {
+    "vi": "bệnh thận mạn",
+    "en": "chronic kidney disease CKD",
+    "zh": "慢性肾脏病"
+  },
+  "AKI": {
+    "vi": "tổn thương thận cấp",
+    "en": "acute kidney injury AKI",
+    "zh": "急性肾损伤"
+  },
+  "CVA": {
+    "vi": "tai biến mạch máu não đột quỵ",
+    "en": "cerebrovascular accident stroke CVA",
+    "zh": "脑血管意外 中风"
+  },
+  "TIA": {
+    "vi": "cơn thiếu máu não thoáng qua",
+    "en": "transient ischemic attack TIA",
+    "zh": "短暂性脑缺血发作"
+  },
+  "GERD": {
+    "vi": "trào ngược dạ dày thực quản",
+    "en": "gastroesophageal reflux disease GERD",
+    "zh": "胃食管反流病"
+  },
+  "UGIB": {
+    "vi": "xuất huyết tiêu hóa trên",
+    "en": "upper gastrointestinal bleeding UGIB",
+    "zh": "上消化道出血"
+  },
+  "EVL": {
+    "vi": "thắt tĩnh mạch thực quản qua nội soi",
+    "en": "endoscopic variceal ligation EVL",
+    "zh": "内镜下食管静脉曲张套扎术"
+  },
+  "UTI": {
+    "vi": "nhiễm trùng đường tiết niệu",
+    "en": "urinary tract infection UTI",
+    "zh": "尿路感染"
+  },
+  "eGFR": {
+    "vi": "mức lọc cầu thận ước tính",
+    "en": "estimated glomerular filtration rate eGFR",
+    "zh": "预估肾小球滤过率"
+  },
+  "HbA1c": {
+    "vi": "chỉ số đường huyết hba1c",
+    "en": "glycated hemoglobin HbA1c",
+    "zh": "糖化血红蛋白"
+  },
+  "LVEF": {
+    "vi": "phân suất tống máu thất trái",
+    "en": "left ventricular ejection fraction LVEF",
+    "zh": "左室射血分数"
+  },
+  "ACS": {
+    "vi": "hội chứng vành cấp",
+    "en": "acute coronary syndrome ACS",
+    "zh": "急性冠脉综合征"
+  },
+  "CAD": {
+    "vi": "bệnh mạch vành tim",
+    "en": "coronary artery disease CAD",
+    "zh": "冠心病 冠状动脉疾病"
+  },
+  "PCI": {
+    "vi": "can thiệp mạch vành qua da",
+    "en": "percutaneous coronary intervention PCI",
+    "zh": "经皮冠状动脉介入治疗"
+  },
+  "AF": {
+    "vi": "rung nhĩ",
+    "en": "atrial fibrillation AF",
+    "zh": "心房颤动 房颤"
+  },
+  "PE": {
+    "vi": "thuyên tắc phổi",
+    "en": "pulmonary embolism PE",
+    "zh": "肺栓塞"
+  },
+  "DVT": {
+    "vi": "huyết khối tĩnh mạch sâu",
+    "en": "deep vein thrombosis DVT",
+    "zh": "深静脉血栓形成"
+  },
+  "SGLT2i": {
+    "vi": "thuốc ức chế sglt2 empagliflozin dapagliflozin",
+    "en": "SGLT2 inhibitors sodium glucose cotransporter 2",
+    "zh": "SGLT2抑制剂"
+  },
+  "ARNI": {
+    "vi": "thuốc arni sacubitril valsartan",
+    "en": "angiotensin receptor-neprilysin inhibitor ARNI sacubitril valsartan",
+    "zh": "血管紧张素受体脑啡肽酶抑制剂"
+  },
+  "MRA": {
+    "vi": "thuốc kháng thụ thể mineralocorticoid spironolactone",
+    "en": "mineralocorticoid receptor antagonist MRA spironolactone",
+    "zh": "盐皮质激素受体拮抗剂"
+  },
+  "NSAIDs": {
+    "vi": "thuốc chống viêm không steroid nsaid",
+    "en": "nonsteroidal anti-inflammatory drugs NSAIDs",
+    "zh": "非甾体抗炎药"
+  },
+  "DOACs": {
+    "vi": "thuốc chống đông đường uống thế hệ mới doac",
+    "en": "direct oral anticoagulants DOACs",
+    "zh": "直接口服抗凝药"
+  },
+  "ACEi": {
+    "vi": "thuốc ức chế men chuyển",
+    "en": "ACE inhibitors angiotensin converting enzyme",
+    "zh": "血管紧张素转换酶抑制剂"
+  },
+  "ARB": {
+    "vi": "thuốc chẹn thụ thể angiotensin",
+    "en": "angiotensin receptor blockers ARB",
+    "zh": "血管紧张素受体拮抗剂"
+  },
+  "BB": {
+    "vi": "thuốc chẹn beta giao cảm",
+    "en": "beta-blockers adrenergic receptor",
+    "zh": "β受体阻滞剂"
+  },
+  "T2DM": {
+    "vi": "đái tháo đường typ 2",
+    "en": "type 2 diabetes mellitus T2DM",
+    "zh": "2型糖尿病"
+  },
+  "T1DM": {
+    "vi": "đái tháo đường typ 1",
+    "en": "type 1 diabetes mellitus T1DM",
+    "zh": "1型糖尿病"
+  },
+  "CAP": {
+    "vi": "viêm phổi mắc phải tại cộng đồng",
+    "en": "community-acquired pneumonia CAP",
+    "zh": "社区获得性肺炎"
+  },
+  "HAP": {
+    "vi": "viêm phổi bệnh viện",
+    "en": "hospital-acquired pneumonia HAP",
+    "zh": "医院获得性肺炎"
+  },
+  "URS": {
+    "vi": "nội soi niệu quản tán sỏi",
+    "en": "ureteroscopy lithotripsy URS",
+    "zh": "输尿管镜碎石术"
+  },
+  "GCS": {
+    "vi": "thang điểm hôn mê glasgow",
+    "en": "Glasgow Coma Scale GCS",
+    "zh": "格拉斯哥昏迷评分"
+  },
+  "EVL": {
+    "vi": "thắt tĩnh mạch thực quản qua nội soi",
+    "en": "endoscopic variceal ligation EVL",
+    "zh": "内镜下食管静脉曲张套扎术"
+  }
+}
