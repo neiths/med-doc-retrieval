@@ -36,15 +36,24 @@ class ArticleScraper:
         self.semaphore = asyncio.Semaphore(concurrency)
 
     async def fetch_url(self, client: httpx.AsyncClient, url: str) -> str | None:
-        """Fetch raw HTML with retry logic."""
+        """Fetch raw HTML with retry logic and rate limit backoff."""
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = await client.get(url, headers=self.headers, follow_redirects=True)
                 if response.status_code == 200:
                     return response.text
+                elif response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After", "3")
+                    wait_time = float(retry_after) if retry_after.isdigit() else 3.0
+                    logger.warning(f"Rate limited (429) on {url}. Backing off for {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
                 elif response.status_code in [404, 410]:
                     logger.warning(f"URL returned {response.status_code}, skipping: {url}")
                     return None
+                elif response.status_code in [500, 502, 503, 504]:
+                    await asyncio.sleep(1.0 * attempt)
+                    continue
             except Exception as e:
                 if attempt == self.max_retries:
                     logger.warning(f"Failed to fetch {url} after {self.max_retries} attempts: {e}")
@@ -54,8 +63,11 @@ class ArticleScraper:
 
     def extract_text(self, html: str, fallback_url: str = "") -> dict[str, str]:
         """Extract clean text and title using trafilatura with BeautifulSoup fallback."""
+        if not html:
+            return {"title": "", "text": ""}
+
+        # 1. Primary: Trafilatura (state-of-the-art for boilerplate & ads removal)
         try:
-            # Trafilatura is state-of-the-art for boilerplate removal and main text extraction
             extracted = trafilatura.extract(
                 html,
                 include_comments=False,
@@ -69,12 +81,28 @@ class ArticleScraper:
         except Exception:
             pass
 
-        # Fallback to BeautifulSoup
+        # 2. Fallback: BeautifulSoup with aggressive boilerplate decomposition
         try:
+            import re
             soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
+            for tag in soup([
+                "script", "style", "nav", "footer", "header", "noscript",
+                "aside", "form", "iframe", "svg"
+            ]):
                 tag.decompose()
-            title = soup.title.string.strip() if soup.title and soup.title.string else ""
+
+            # Remove noise classes common in VN/ZH news portals
+            for noisy in soup.find_all(class_=re.compile(r"(advertisement|banner|sidebar|social-share|comment|newsletter|footer-link)", re.I)):
+                noisy.decompose()
+
+            # Extract title
+            title = ""
+            h1 = soup.find("h1")
+            if h1 and h1.get_text(strip=True):
+                title = h1.get_text(strip=True)
+            elif soup.title and soup.title.string:
+                title = soup.title.string.strip()
+
             body_text = soup.get_text(separator="\n", strip=True)
             return {"title": title, "text": body_text}
         except Exception as e:
@@ -117,8 +145,9 @@ class ArticleScraper:
         self,
         input_file: Path | str,
         output_file: Path | str,
+        resume: bool = True,
     ) -> list[dict[str, Any]]:
-        """Scrapes all URLs listed in input JSONL and saves results to output JSONL."""
+        """Scrapes all URLs listed in input JSONL with resumable checkpointing and incremental flushing."""
         in_path = Path(input_file)
         out_path = Path(output_file)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,22 +158,56 @@ class ArticleScraper:
                 if line.strip():
                     items.append(json.loads(line))
 
-        logger.info(f"Loaded {len(items)} items from {in_path} to scrape.")
+        # Check existing progress if resume is enabled
+        existing_results: list[dict[str, Any]] = []
+        existing_ids: set[str] = set()
+        if resume and out_path.exists():
+            with open(out_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            rec = json.loads(line)
+                            existing_results.append(rec)
+                            if "doc_id" in rec:
+                                existing_ids.add(str(rec["doc_id"]))
+                        except Exception:
+                            pass
 
-        results = []
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            tasks = [self.process_item(client, item) for item in items]
-            for future in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Scraping URLs"):
-                res = await future
-                if res:
-                    results.append(res)
+        items_to_scrape = [it for it in items if str(it.get("id")) not in existing_ids]
 
-        # Write results
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in results)
+        if existing_ids:
+            logger.info(
+                f"Resuming crawler: {len(existing_ids)}/{len(items)} items already scraped in {out_path}. "
+                f"Remaining to scrape: {len(items_to_scrape)}."
+            )
+        else:
+            logger.info(f"Loaded {len(items)} items from {in_path} to scrape.")
 
-        success_count = sum(1 for r in results if r.get("status") == "success")
+        if not items_to_scrape:
+            logger.info(f"All {len(items)} articles already present in {out_path}. Skipping crawl.")
+            return existing_results
+
+        new_results = []
+        # Append mode ensures existing data is preserved, flush ensures no data loss on interrupt
+        mode = "a" if (resume and out_path.exists()) else "w"
+        with open(out_path, mode, encoding="utf-8") as out_f:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                tasks = [self.process_item(client, item) for item in items_to_scrape]
+                for future in tqdm(
+                    asyncio.as_completed(tasks),
+                    total=len(tasks),
+                    desc="Scraping URLs (resumable)",
+                ):
+                    res = await future
+                    if res:
+                        new_results.append(res)
+                        out_f.write(json.dumps(res, ensure_ascii=False) + "\n")
+                        out_f.flush()
+
+        all_results = existing_results + new_results
+        success_count = sum(1 for r in all_results if r.get("status") == "success")
         logger.info(
-            f"Scraping completed: {success_count}/{len(items)} articles extracted successfully -> {out_path}"
+            f"Scraping completed: {success_count}/{len(items)} articles successfully available -> {out_path}"
         )
-        return results
+        return all_results
+

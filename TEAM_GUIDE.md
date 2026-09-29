@@ -72,9 +72,14 @@ cp .env.example .env
 
 Mọi thao tác đều có thể chạy qua CLI `python main.py --help`:
 
-### 1. Thu thập dữ liệu từ URL (Tiếng Việt & Tiếng Trung)
+### 0. Nạp trước Model Weights về Local (Chạy Offline 100%, không lo nghẽn mạng)
 ```bash
-python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 15
+python scripts/preload_models.py
+```
+
+### 1. Thu thập dữ liệu từ URL (Tiếng Việt & Tiếng Trung, có Checkpointing tự resume)
+```bash
+python main.py crawl-urls --input data/raw/urls.jsonl --output data/processed/crawled_articles.jsonl --concurrency 15 --resume
 ```
 
 ### 2. Thu thập dữ liệu tiếng Anh từ PubMed / PubTator 3.0
