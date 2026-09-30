@@ -224,7 +224,11 @@ class QueryTranslator:
         found_zh = []
         for acr, exps in self.acronyms.items():
             if isinstance(exps, dict):
-                pattern = rf"(?i)(?:\b|_|\(){re.escape(acr)}(?:\b|_|\))"
+                # Acronyms with <= 2 characters (e.g. PE, AF, BB) or common homographs (e.g. CAP)
+                # require case-sensitive uppercase matching to prevent false positives with lowercase words.
+                is_short_or_ambiguous = len(acr) <= 2 or acr in {"CAP", "HAP"}
+                case_flag = "" if is_short_or_ambiguous else "(?i)"
+                pattern = rf"{case_flag}(?:\b|_|\(){re.escape(acr)}(?:\b|_|\))"
                 if re.search(pattern, query):
                     if exps.get("vi"):
                         found_vi.append(exps["vi"])

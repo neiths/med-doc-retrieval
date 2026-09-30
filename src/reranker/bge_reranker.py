@@ -125,19 +125,38 @@ class BGEReranker:
             if len(doc_ids) >= top_k_docs:
                 break
 
-        # 2. Select top chunks per document (up to max_chunks_per_doc each)
+        # 2. Balanced chunk selection with two-pass recall safeguard:
+        # Pass 1 (Diversity): Select up to max_chunks_per_doc per document to prevent single-doc domination
+        # Pass 2 (Recall Safeguard): If slot budget remains, fill up to top_k_chunks from valid candidates
+        # whose doc_id is in selected_doc_set, preserving maximum Chunk Recall for Macro F2.
         selected_doc_set = set(doc_ids)
         formatted_chunks = []
+        selected_chunk_keys = set()
         doc_chunk_count: dict[str, int] = {}
+
+        # Pass 1: Diversity pass
         for c in valid_candidates:
             did = str(c["doc_id"])
-            if did in selected_doc_set:
+            chunk_key = (did, c["chunk_text"])
+            if did in selected_doc_set and chunk_key not in selected_chunk_keys:
                 cnt = doc_chunk_count.get(did, 0)
                 if cnt < max_chunks_per_doc:
                     formatted_chunks.append({"doc_id": did, "chunk_text": c["chunk_text"]})
+                    selected_chunk_keys.add(chunk_key)
                     doc_chunk_count[did] = cnt + 1
             if len(formatted_chunks) >= top_k_chunks:
                 break
+
+        # Pass 2: Recall safeguard pass (fill remaining quota from top scoring chunks of selected docs)
+        if len(formatted_chunks) < top_k_chunks:
+            for c in valid_candidates:
+                did = str(c["doc_id"])
+                chunk_key = (did, c["chunk_text"])
+                if did in selected_doc_set and chunk_key not in selected_chunk_keys:
+                    formatted_chunks.append({"doc_id": did, "chunk_text": c["chunk_text"]})
+                    selected_chunk_keys.add(chunk_key)
+                    if len(formatted_chunks) >= top_k_chunks:
+                        break
 
         return doc_ids, formatted_chunks
 

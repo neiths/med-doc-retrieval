@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from pathlib import Path
+from typing import Any
 
 import torch
 from loguru import logger
@@ -77,7 +77,7 @@ def preload_model(model_info: dict[str, str], device: str, warmup: bool = True) 
             from FlagEmbedding import BGEM3FlagModel
 
             use_fp16 = device == "cuda"
-            model = BGEM3FlagModel(model_name, use_fp16=use_fp16, device=device)
+            model = BGEM3FlagModel(model_name, use_fp16=use_fp16, devices=device)
             load_time = time.time() - t0
             logger.info(f"Loaded {model_name} in {load_time:.2f}s")
 
