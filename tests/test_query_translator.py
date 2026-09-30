@@ -106,3 +106,18 @@ def test_expand_acronyms():
     zh_kw = translator.extract_chinese_keywords("Bệnh nhân HFrEF")
     assert "射血分数降低的心力衰竭" in zh_kw
 
+    # Verify short / ambiguous acronym case-sensitivity safeguard:
+    # Uppercase CAP should match, lowercase 'cap' (as in 'cap cuu') must NOT match
+    exp_cap_upper = translator.expand_acronyms("Bệnh nhân mắc CAP")
+    assert "viêm phổi mắc phải tại cộng đồng" in exp_cap_upper["vi"]
+
+    exp_cap_lower = translator.expand_acronyms("bệnh nhân cap cứu khẩn cấp")
+    assert "viêm phổi" not in exp_cap_lower["vi"]
+
+    # Short acronym PE: uppercase matches, lowercase does not
+    exp_pe_upper = translator.expand_acronyms("Chẩn đoán PE cấp")
+    assert "thuyên tắc phổi" in exp_pe_upper["vi"]
+
+    exp_pe_lower = translator.expand_acronyms("phương pháp pe thắt lưng")
+    assert "thuyên tắc phổi" not in exp_pe_lower["vi"]
+
