@@ -305,8 +305,8 @@ def main():
         "--concurrency",
         "-c",
         type=int,
-        default=15,
-        help="Concurrent request limit (default: 15).",
+        default=10,
+        help="Concurrent request limit (default: 10, recommended for cloud/Kaggle).",
     )
     parser.add_argument(
         "--shard-id",
