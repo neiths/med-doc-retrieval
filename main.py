@@ -23,9 +23,40 @@ console = Console()
 
 
 @app.command()
+def download_dataset(
+    repo_id: str = typer.Option(
+        "AIGuruTinix/ViBioMIR", "--repo-id", "-r", help="Hugging Face dataset repository"
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/raw/vibio_mir"), "--output-dir", "-o", help="Directory to save raw files"
+    ),
+    queries_jsonl: Path = typer.Option(
+        Path("data/raw/queries.jsonl"), "--queries", "-q", help="Export queries JSONL"
+    ),
+    sample_urls: Path = typer.Option(
+        Path("data/raw/sample_urls.jsonl"), "--sample-urls", "-s", help="Export sample URLs JSONL"
+    ),
+):
+    """Downloads ViBioMIR competition dataset from Hugging Face and extracts queries & sample URLs."""
+    from scripts.download_vibio_mir import (
+        download_dataset as hf_download,
+    )
+    from scripts.download_vibio_mir import (
+        inspect_and_export_corpus,
+        inspect_and_export_queries,
+    )
+
+    console.print(f"[bold green]Downloading {repo_id} to {output_dir}...[/bold green]")
+    d_dir = hf_download(repo_id=repo_id, output_dir=output_dir)
+    inspect_and_export_queries(d_dir / "query.parquet", export_jsonl_path=queries_jsonl)
+    inspect_and_export_corpus(d_dir / "links_corpus.parquet", export_sample_path=sample_urls)
+    console.print(f"[bold green]ViBioMIR dataset ready at {output_dir}![/bold green]")
+
+
+@app.command()
 def crawl_urls(
     input_file: Path = typer.Option(
-        Path("data/raw/urls.jsonl"), "--input", "-i", help="JSONL with {id, url}"
+        Path("data/raw/urls.jsonl"), "--input", "-i", help="JSONL or Parquet with {id, url}"
     ),
     output_file: Path = typer.Option(
         Path("data/processed/crawled_articles.jsonl"), "--output", "-o", help="Output JSONL"
@@ -155,7 +186,7 @@ def evaluate(
 @app.command()
 def generate_submission(
     queries_file: Path = typer.Option(
-        Path("data/raw/queries.jsonl"), "--queries", "-q", help="Test queries JSONL"
+        Path("data/raw/queries.jsonl"), "--queries", "-q", help="Test queries JSONL or Parquet"
     ),
     submission_name: str = typer.Option("submission.json", "--name", help="Name of output JSON file"),
     config_path: Path = typer.Option(Path("configs/config.yaml"), "--config", help="Config file"),

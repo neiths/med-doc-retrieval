@@ -280,13 +280,19 @@ class MedicalRetrievalPipeline:
         }
 
     def predict_queries_jsonl(self, queries_file: str | Path) -> list[dict[str, Any]]:
-        """Runs predictions for all queries in a JSONL file."""
+        """Runs predictions for all queries in a JSONL or Parquet file."""
         q_path = Path(queries_file)
         queries = []
-        with open(q_path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    queries.append(json.loads(line))
+        if q_path.suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            table = pq.read_table(q_path)
+            queries = table.to_pylist()
+        else:
+            with open(q_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        queries.append(json.loads(line))
 
         predictions = []
         logger.info(f"Predicting {len(queries)} queries...")
