@@ -131,23 +131,37 @@ class MedicalRetrievalPipeline:
         logger.info(f"Saved chunk metadata to {chunks_file}")
 
         # 3. Dense & Sparse Indexing
-        logger.info("Computing BGE-M3 dense and native lexical sparse embeddings...")
-        chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in all_chunks]
-        embeddings, sparse_weights = self.embedder.encode_both(chunk_texts, show_progress_bar=True)
-
         if self.config.retrieval.engine == "qdrant":
-            logger.info(f"Indexing {len(all_chunks)} chunks into Qdrant Local Engine...")
+            indexing_batch_size = 2000
+            total_chunks = len(all_chunks)
+            logger.info(
+                f"Indexing {total_chunks:,} chunks into Qdrant in batches of {indexing_batch_size:,}..."
+            )
+
             if self.qdrant_index is None:
                 self.qdrant_index = QdrantLocalIndex(
                     storage_path=self.config.retrieval.qdrant_path,
                     collection_name=self.config.retrieval.collection_name,
-                    dimension=embeddings.shape[1],
+                    dimension=1024,
                 )
-            self.qdrant_index.add_chunks(all_chunks, embeddings, sparse_weights=sparse_weights)
+
+            for start_idx in range(0, total_chunks, indexing_batch_size):
+                end_idx = min(start_idx + indexing_batch_size, total_chunks)
+                batch_chunks = all_chunks[start_idx:end_idx]
+                chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in batch_chunks]
+                embeddings, sparse_weights = self.embedder.encode_both(chunk_texts)
+                self.qdrant_index.add_chunks(batch_chunks, embeddings, sparse_weights=sparse_weights)
+                logger.info(
+                    f"Indexed {end_idx:,}/{total_chunks:,} chunks into Qdrant (Total in DB: {self.qdrant_index.count():,})."
+                )
+
             logger.info(
-                f"Qdrant collection '{self.config.retrieval.collection_name}' ready with {self.qdrant_index.count()} chunks."
+                f"Qdrant collection '{self.config.retrieval.collection_name}' ready with {self.qdrant_index.count():,} chunks."
             )
         else:
+            logger.info("Computing BGE-M3 dense and native lexical sparse embeddings...")
+            chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in all_chunks]
+            embeddings, sparse_weights = self.embedder.encode_both(chunk_texts, show_progress_bar=True)
             chunk_ids = [c["chunk_id"] for c in all_chunks]
             dense_idx = DenseIndex(dimension=embeddings.shape[1])
             dense_idx.add(embeddings=embeddings, chunk_ids=chunk_ids, chunk_metadata=all_chunks)
@@ -162,21 +176,28 @@ class MedicalRetrievalPipeline:
     def load_indices(self, indices_dir: str | Path = "data/indices"):
         """Loads FAISS and BM25 indices from disk (fallback when engine == 'faiss')."""
         idx_dir = Path(indices_dir)
-        self.dense_index = DenseIndex.load(idx_dir)
-        self.sparse_index = SparseIndex.load(idx_dir)
-        self.hybrid_retriever = HybridRetriever(
-            dense_index=self.dense_index,
-            sparse_index=self.sparse_index,
-            fusion_method=self.config.retrieval.fusion_method,
-            rrf_k=self.config.retrieval.rrf_k,
-            dense_weight=self.config.retrieval.dense_weight,
-            sparse_weight=self.config.retrieval.sparse_weight,
-        )
+        try:
+            self.dense_index = DenseIndex.load(idx_dir)
+        except Exception as e:
+            logger.warning(f"Could not load DenseIndex: {e}")
+
+        try:
+            self.sparse_index = SparseIndex.load(idx_dir)
+            self.hybrid_retriever = HybridRetriever(
+                dense_index=self.dense_index,
+                sparse_index=self.sparse_index,
+                fusion_method=self.config.retrieval.fusion_method,
+                rrf_k=self.config.retrieval.rrf_k,
+                dense_weight=self.config.retrieval.dense_weight,
+                sparse_weight=self.config.retrieval.sparse_weight,
+            )
+        except Exception:
+            logger.debug("SparseIndex not loaded. Operating in dense-only mode.")
         logger.info("Indices successfully loaded into memory.")
 
     def search_query(self, query: str) -> dict[str, Any]:
         """Performs end-to-end retrieval for a single query across VI, ZH, and EN."""
-        if self.config.retrieval.engine == "faiss" and self.hybrid_retriever is None:
+        if self.config.retrieval.engine == "faiss" and self.dense_index is None and self.hybrid_retriever is None:
             try:
                 self.load_indices(self.config.paths.indices_dir)
             except Exception as e:
@@ -202,7 +223,7 @@ class MedicalRetrievalPipeline:
         q_emb = q_dense[0]
         q_sparse_dict = q_sparse[0] if q_sparse else None
 
-        # 2. Local Hybrid Search (VI & ZH from pre-built indices)
+        # 2. Local Hybrid / Dense Search (VI & ZH from pre-built indices)
         local_candidates: list[dict[str, Any]] = []
         if self.config.retrieval.engine == "qdrant" and self.qdrant_index is not None:
             if self.qdrant_index.count() > 0:
@@ -220,6 +241,22 @@ class MedicalRetrievalPipeline:
                 dense_top_k=self.config.retrieval.dense_top_k,
                 sparse_top_k=self.config.retrieval.sparse_top_k,
             )
+        elif self.dense_index is not None:
+            dense_results = self.dense_index.search(
+                query_embedding=q_emb,
+                top_k=self.config.retrieval.hybrid_top_k,
+            )
+            local_candidates = [
+                {
+                    "doc_id": r[2].get("doc_id"),
+                    "chunk_id": r[0],
+                    "chunk_text": r[2].get("chunk_text"),
+                    "score": r[1],
+                    "lang": r[2].get("lang", "vi"),
+                    "metadata": {"title": r[2].get("title", "")},
+                }
+                for r in dense_results
+            ]
 
         # 3. Dynamic English Retrieval via PubMed (EN)
         pubmed_candidates: list[dict[str, Any]] = []

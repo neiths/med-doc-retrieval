@@ -69,10 +69,29 @@ class DenseIndex:
         distances, indices = self.index.search(q_vec, k)
 
         results = []
-        for dist, idx in zip(distances[0], indices[0]):
-            if idx < 0 or idx >= len(self.chunk_ids):
-                continue
-            results.append((self.chunk_ids[idx], float(dist), self.chunk_metadata[idx]))
+        if hasattr(self, "_sqlite_conn") and self._sqlite_conn is not None:
+            cur = self._sqlite_conn.cursor()
+            for dist, idx_val in zip(distances[0], indices[0]):
+                if idx_val < 0 or idx_val >= self.index.ntotal:
+                    continue
+                row = cur.execute(
+                    "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE idx = ?",
+                    (int(idx_val),),
+                ).fetchone()
+                if row:
+                    meta = {
+                        "doc_id": row[0],
+                        "chunk_id": row[1],
+                        "chunk_text": row[2],
+                        "title": row[3],
+                        "lang": row[4],
+                    }
+                    results.append((row[1], float(dist), meta))
+        else:
+            for dist, idx in zip(distances[0], indices[0]):
+                if idx < 0 or idx >= len(self.chunk_ids):
+                    continue
+                results.append((self.chunk_ids[idx], float(dist), self.chunk_metadata[idx]))
 
         return results
 
@@ -99,17 +118,32 @@ class DenseIndex:
 
     @classmethod
     def load(cls, directory: Path | str) -> "DenseIndex":
-        """Loads FAISS index and metadata from disk."""
+        """Loads FAISS index and metadata from disk (supports both SQLite and JSON)."""
+        import sqlite3
+
         load_dir = Path(directory)
         faiss_file = load_dir / "dense_index.faiss"
+        sqlite_file = load_dir / "chunks_meta.sqlite"
         meta_file = load_dir / "dense_metadata.json"
 
-        with open(meta_file, encoding="utf-8") as f:
-            meta = json.load(f)
-
-        idx = cls(dimension=meta["dimension"])
+        idx = cls(dimension=1024)
         idx.index = faiss.read_index(str(faiss_file))
-        idx.chunk_ids = meta["chunk_ids"]
-        idx.chunk_metadata = meta["chunk_metadata"]
-        logger.info(f"Loaded FAISS dense index with {idx.index.ntotal} vectors from {load_dir}")
+
+        if sqlite_file.exists():
+            idx._sqlite_conn = sqlite3.connect(sqlite_file)
+            logger.info(
+                f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir}"
+            )
+        elif meta_file.exists():
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+            idx.dimension = meta.get("dimension", 1024)
+            idx.chunk_ids = meta.get("chunk_ids", [])
+            idx.chunk_metadata = meta.get("chunk_metadata", [])
+            logger.info(
+                f"Loaded FAISS dense index with {idx.index.ntotal:,} vectors from {load_dir}"
+            )
+        else:
+            logger.warning(f"No metadata found for FAISS index in {load_dir}")
         return idx
+
