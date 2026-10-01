@@ -153,10 +153,16 @@ class ArticleScraper:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         items = []
-        with open(in_path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    items.append(json.loads(line))
+        if in_path.suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            table = pq.read_table(in_path, columns=["id", "url"])
+            items = table.to_pylist()
+        else:
+            with open(in_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        items.append(json.loads(line))
 
         # Check existing progress if resume is enabled
         existing_results: list[dict[str, Any]] = []
