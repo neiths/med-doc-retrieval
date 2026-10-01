@@ -149,21 +149,33 @@ def load_candidate_urls(
     return interleaved_items
 
 
-def get_already_scraped_ids(output_file: Path) -> set[str]:
-    """Reads existing doc_ids from output JSONL for instant resumability."""
-    if not output_file.exists():
-        return set()
-
+def get_already_scraped_ids(
+    output_file: Path,
+    resume_from: list[Path] | Path | None = None,
+) -> set[str]:
+    """Reads existing doc_ids from output JSONL and optional resume_from files for instant resumability."""
     existing_ids = set()
-    with open(output_file, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                try:
-                    rec = json.loads(line)
-                    if "doc_id" in rec:
-                        existing_ids.add(str(rec["doc_id"]))
-                except Exception:
-                    pass
+    files_to_check = []
+    if resume_from:
+        if isinstance(resume_from, (str, Path)):
+            files_to_check.append(Path(resume_from))
+        else:
+            files_to_check.extend([Path(p) for p in resume_from])
+    if output_file.exists():
+        files_to_check.append(output_file)
+
+    for fpath in files_to_check:
+        if fpath.exists():
+            with open(fpath, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        try:
+                            rec = json.loads(line)
+                            did = str(rec.get("doc_id") or rec.get("id"))
+                            if did:
+                                existing_ids.add(did)
+                        except Exception:
+                            pass
     return existing_ids
 
 
@@ -174,10 +186,24 @@ async def run_crawler_pipeline(
     timeout_seconds: int = 15,
     max_retries: int = 2,
     flush_interval: int = 50,
+    resume_from: list[Path] | Path | None = None,
+    min_delay: float = 0.3,
+    max_delay: float = 0.8,
 ):
-    """Executes asynchronous crawling using a fixed-size worker pool and buffered file writing."""
+    """Executes asynchronous crawling using a fixed-size worker pool, polite delay, and buffered writing."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    existing_ids = get_already_scraped_ids(output_file)
+
+    # If resume_from is given and output_file is empty / new, copy existing data first so final output has everything
+    if resume_from:
+        resume_paths = [Path(resume_from)] if isinstance(resume_from, (str, Path)) else [Path(p) for p in resume_from]
+        for rp in resume_paths:
+            if rp.exists() and rp.resolve() != output_file.resolve():
+                if not output_file.exists() or output_file.stat().st_size == 0:
+                    logger.info(f"Copying existing records from {rp} to {output_file}...")
+                    import shutil
+                    shutil.copyfile(rp, output_file)
+
+    existing_ids = get_already_scraped_ids(output_file, resume_from=resume_from)
 
     items_to_crawl = [it for it in items if str(it.get("id")) not in existing_ids]
 
@@ -222,8 +248,9 @@ async def run_crawler_pipeline(
                 queue.task_done()
                 break
             try:
-                # Add small jitter to avoid strict lockstep bursts
-                await asyncio.sleep(random.uniform(0.05, 0.2))
+                # Polite randomized sleep to avoid strict lockstep bursts and anti-bot rate-limits
+                sleep_sec = random.uniform(min_delay, max_delay)
+                await asyncio.sleep(sleep_sec)
                 result = await scraper.process_item(client, it)
                 if result:
                     await write_queue.put(result)
@@ -332,6 +359,25 @@ def main():
         action="store_true",
         help="Only crawl high-priority authoritative hospital & clinical wikis.",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        nargs="*",
+        default=None,
+        help="Path(s) to previous crawled JSONL (e.g. /kaggle/input/dataset/crawled_shard_1.jsonl) to resume from.",
+    )
+    parser.add_argument(
+        "--min-delay",
+        type=float,
+        default=0.3,
+        help="Minimum polite sleep delay in seconds between requests (default: 0.3).",
+    )
+    parser.add_argument(
+        "--max-delay",
+        type=float,
+        default=0.8,
+        help="Maximum polite sleep delay in seconds between requests (default: 0.8).",
+    )
 
     args = parser.parse_args()
 
@@ -350,6 +396,9 @@ def main():
             items=items,
             output_file=args.output,
             concurrency=args.concurrency,
+            resume_from=args.resume_from,
+            min_delay=args.min_delay,
+            max_delay=args.max_delay,
         )
     )
 
