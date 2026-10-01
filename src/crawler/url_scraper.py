@@ -41,7 +41,20 @@ class ArticleScraper:
             try:
                 response = await client.get(url, headers=self.headers, follow_redirects=True)
                 if response.status_code == 200:
-                    return response.text
+                    content_bytes = response.content
+                    lower_head = content_bytes[:2048].lower()
+                    if b"charset=gb" in lower_head or b"charset=\"gb" in lower_head or b"charset='gb" in lower_head:
+                        try:
+                            return content_bytes.decode("gb18030", errors="replace")
+                        except Exception:
+                            pass
+                    try:
+                        return content_bytes.decode("utf-8")
+                    except UnicodeDecodeError:
+                        try:
+                            return content_bytes.decode("gb18030", errors="replace")
+                        except Exception:
+                            return response.text
                 elif response.status_code == 429:
                     retry_after = response.headers.get("Retry-After", "3")
                     wait_time = float(retry_after) if retry_after.isdigit() else 3.0
