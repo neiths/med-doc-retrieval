@@ -247,7 +247,7 @@ class MedicalRetrievalPipeline:
                 )
         elif self.hybrid_retriever is not None:
             local_candidates = self.hybrid_retriever.search(
-                query_text=query,
+                query_text=query_text_for_search,
                 query_embedding=q_emb,
                 top_k=self.config.retrieval.hybrid_top_k,
                 dense_top_k=self.config.retrieval.dense_top_k,

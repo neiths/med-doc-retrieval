@@ -16,15 +16,15 @@ crawler:
   ncbi_api_key: null  # Optional NCBI Entrez API key for higher rate limits
 
 chunking:
-  max_chunk_size: 512       # Maximum characters per chunk
-  chunk_overlap: 64         # Overlap characters between consecutive chunks
-  min_chunk_size: 50        # Filter out tiny chunks/noise
+  max_chunk_size: 800       # Increased from 512 chars (~200 tokens, well within <=1024 tokens recommended by BTC)
+  chunk_overlap: 128        # Increased from 64 chars to prevent cutting clinical context
+  min_chunk_size: 60        # Filter out tiny chunks/noise
   split_by_sentences: true  # Prefer splitting at sentence boundaries
   enable_contextual: true   # Enrich chunk with document title/context for embedding and reranking
 
 embedding:
   model_name: "BAAI/bge-m3"
-  batch_size: 32
+  batch_size: 32            # 32 fits 6GB VRAM; on Colab T4/A100 can be 64-128
   max_length: 512
   normalize_embeddings: true
   device: "auto"            # "cuda", "cpu", or "auto"
@@ -35,23 +35,23 @@ retrieval:
   engine: "faiss"           # "faiss" (high performance, 1.3GB RAM) or "qdrant"
   qdrant_path: "data/indices/qdrant_db"
   collection_name: "medical_chunks"
-  dense_top_k: 50
-  sparse_top_k: 50
+  dense_top_k: 120          # Increased from 50 to provide sufficient candidate pool
+  sparse_top_k: 120         # Increased from 50
   fusion_method: "rrf"      # "rrf" (Reciprocal Rank Fusion)
   rrf_k: 60
   dense_weight: 0.6
   sparse_weight: 0.4
-  hybrid_top_k: 30
+  hybrid_top_k: 100         # Increased from 30 to 100 to feed enough diverse candidates to reranker
 
 reranker:
   enabled: true
   model_name: "BAAI/bge-reranker-large"
-  batch_size: 32
+  batch_size: 32            # 32 locally, can be 64 on Colab
   device: "auto"
-  top_k_chunks: 10          # Maximum number of chunks to select per query
-  top_k_docs: 5             # Maximum distinct documents to select per query
-  score_threshold: -5.0     # Minimum cross-encoder logit score filter
-  max_chunks_per_doc: 2     # Maximum chunks selected per document to eliminate tail redundancy
+  top_k_chunks: 40          # Increased from 10 to 40: dramatically boosts Chunk Recall under Macro F2
+  top_k_docs: 25            # Increased from 5 to 25: boosts Doc Recall (gold average is ~71 docs)
+  score_threshold: -6.0     # Relaxed from -5.0 to capture high-recall candidates
+  max_chunks_per_doc: 2     # At most 2 chunks per doc to maintain diversity across 25 docs
 
 query_translation:
   enabled: true
@@ -64,7 +64,8 @@ query_translation:
 
 pubmed:
   enabled: true
-  max_candidates_per_query: 15
+  max_candidates_per_query: 30              # Increased from 15 to capture more PubMed evidence
   source_api: "europe_pmc"  # "europe_pmc", "pubtator", "ncbi", or "hybrid"
   cache_file: "data/processed/pubmed_cache.jsonl"
+
 

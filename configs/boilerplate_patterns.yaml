@@ -1,20 +1,16 @@
 patterns:
-# 1. Generalized DateTime stamps (e.g. 14:00 | 24/09/2026, 03/02/2023, 2026-09-26 07:14:00)
-- '^(?:\d{2}:\d{2}\s*\|\s*\d{2}/\d{2}/\d{4}|\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}).*$'
-
-# 2. Standalone Provincial Newspapers & Broadcasters (e.g. Báo Lai Châu, Báo Cần Thơ, Đài PTTH Quảng Ninh)
-- '(?i)^\s*(?:Báo|Đài\s+PTTH|Đài\s+tiếng\s+nói|Đài\s+truyền\s+hình|Cổng\s+thông\s+tin\s+điện\s+tử)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$'
-
-# 3. Standalone Ministries & Government Agencies (e.g. Bộ Giáo dục và Đào tạo, Bộ Nội vụ, Văn phòng Chính phủ)
-- '(?i)^\s*(?:Bộ|Văn\s+phòng\s+Chính\s+phủ|Ủy\s+ban\s+Dân\s+tộc|Tổng\s+cục\s+Hải\s+quan|Viện\s+KSND|Ngân\s+hàng\s+nhà\s+nước)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$'
-
-# 4. Standalone Attribution footers (e.g. Theo Zing, Theo TTXVN, Theo Vietnam+, Nguồn Suckhoedoisong)
-- '(?i)^\s*(?:Theo|Nguồn)\s+(?:Zing|TTXVN|Vietnam\+|TNO|Suckhoedoisong|VnExpress|Dân\s+trí|Thanh\s+Niên|Thu\s+Phương).*$'
-
-# 5. Template tags & Isolated Phone Numbers
-- '^\s*\{[a-zA-Z0-9_-]+\}\s*$'
-- '^\s*(?:Hotline\s*:?\s*)?(?:\+?84|0|\b1900\b)[\d\.\s-]{8,15}\s*$'
-
-# 6. Specific Website Navigation & Social Artifacts
-- '(?i)^.*(Chia\ sẻ\ trực\ tuyến|Xem\ tất\ cả|Video\ sức\ khỏe\ ngắn|Khám\ bệnh\ Online|Liên\ hệ\ hợp\ tác|Lựa\ chọn\ dịch\ vụ|Bình\ luận\ \(\)|39健康网.*未经书面授权请勿转载).*$'
-- '(?i)^.*(Quý\ khách\ hàng\ vui\ lòng\ lựa\ chọn\ dịch\ vụ\ y\ tế\ theo\ nhu\ cầu|Không\ sao\ chép\ dưới\ mọi\ hình\ thức\ khi\ chưa\ có\ sự\ đồng\ ý|Để\ nhận\ được\ các\ cảnh\ báo\ từ\ Bluezone|Sau\ khi\ cài\ đặt,\ người\ dùng\ cần\ cấp\ quyền\ cho\ ứng\ dụng\ Bluezone).*$'
+- ^(?:\d{2}:\d{2}\s*\|\s*\d{2}/\d{2}/\d{4}|\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}).*$
+- (?i)^\s*(?:Báo|Đài\s+PTTH|Đài\s+tiếng\s+nói|Đài\s+truyền\s+hình|Cổng\s+thông\s+tin\s+điện\s+tử)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$
+- (?i)^\s*(?:Bộ|Văn\s+phòng\s+Chính\s+phủ|Ủy\s+ban\s+Dân\s+tộc|Tổng\s+cục\s+Hải\s+quan|Viện\s+KSND|Ngân\s+hàng\s+nhà\s+nước)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$
+- (?i)^\s*(?:Theo|Nguồn)\s+(?:Zing|TTXVN|Vietnam\+|TNO|Suckhoedoisong|VnExpress|Dân\s+trí|Thanh\s+Niên|Thu\s+Phương).*$
+- ^\s*\{[a-zA-Z0-9_-]+\}\s*$
+- ^\s*(?:Hotline\s*:?\s*)?(?:\+?84|0|\b1900\b)[\d\.\s-]{8,15}\s*$
+- (?i)^.*(Chia\ sẻ\ trực\ tuyến|Xem\ tất\ cả|Video\ sức\ khỏe\ ngắn|Khám\ bệnh\ Online|Liên\
+  hệ\ hợp\ tác|Lựa\ chọn\ dịch\ vụ|Bình\ luận\ \(\)|39健康网.*未经书面授权请勿转载).*$
+- (?i)^.*(Quý\ khách\ hàng\ vui\ lòng\ lựa\ chọn\ dịch\ vụ\ y\ tế\ theo\ nhu\ cầu|Không\
+  sao\ chép\ dưới\ mọi\ hình\ thức\ khi\ chưa\ có\ sự\ đồng\ ý|Để\ nhận\ được\ các\
+  cảnh\ báo\ từ\ Bluezone|Sau\ khi\ cài\ đặt,\ người\ dùng\ cần\ cấp\ quyền\ cho\
+  ứng\ dụng\ Bluezone).*$
+- (?i)^.*(Weblink:Tổng\ cục\ du\ lịch|Tạp\ chí\ cộng\ sản|UBMT\ Tổ\ quốc\ Việt\ Nam|Quốc\
+  hội\ Việt\ Nam|Website\ Chính\ phủ|Đảng\ CS\ Việt\ Nam|\-\ Thông\ tin\ đại\ chúng\
+  \-).*$
