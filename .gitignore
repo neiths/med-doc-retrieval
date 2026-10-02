@@ -220,6 +220,7 @@ __marimo__/
 # Competition data & local artifacts
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/queries.jsonl
 data/processed/*
 !data/processed/.gitkeep
 data/indices/*
