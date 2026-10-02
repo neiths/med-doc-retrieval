@@ -125,7 +125,9 @@ def convert_and_validate(
                     stats["duplicate_skipped"] += 1
                     continue
 
-                text = record.get("text", "") or ""
+                raw_text = record.get("text", "") or ""
+                from src.ingestion.cleaner import normalize_text
+                text = normalize_text(raw_text, strip_boilerplate=True)
                 text_len = len(text.strip())
                 if text_len < min_chars:
                     stats["too_short_skipped"] += 1

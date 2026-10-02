@@ -58,8 +58,54 @@ class DocumentChunk(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+# Common medical and Vietnamese/English abbreviations to avoid false sentence splits
+COMMON_ABBREVIATIONS = {
+    "bs.", "ts.", "pgs.", "gs.", "ths.", "ds.", "bv.", "tp.",
+    "dr.", "mr.", "mrs.", "ms.", "prof.", "vs.", "etc.", "i.e.", "e.g."
+}
+
+
+def split_sentences_with_spans(text: str, lang: str = "vi") -> list[tuple[int, int, str]]:
+    """Splits text into complete sentences while tracking exact character offsets [start, end]."""
+    if not text:
+        return []
+
+    import re
+
+    if lang == "zh":
+        pattern = re.compile(r"([。！？\n]+)")
+    else:
+        pattern = re.compile(r"([.!?]+(?:\s+|\n+|$)|(?:\n{1,}))")
+
+    spans = []
+    start = 0
+    for match in pattern.finditer(text):
+        m_start = match.start()
+        m_end = match.end()
+        # Avoid splitting on common abbreviations
+        token_before = (
+            text[max(0, m_start - 6) : m_start + 1].lower().split()[-1]
+            if text[max(0, m_start - 6) : m_start + 1]
+            else ""
+        )
+        if token_before in COMMON_ABBREVIATIONS and not match.group(0).startswith("\n"):
+            continue
+
+        segment = text[start:m_end]
+        if segment.strip():
+            spans.append((start, m_end, segment.strip()))
+        start = m_end
+
+    if start < len(text):
+        segment = text[start:]
+        if segment.strip():
+            spans.append((start, len(text), segment.strip()))
+
+    return spans
+
+
 class DocumentChunker:
-    """Splits documents into overlapping chunks while preserving exact substring spans."""
+    """Splits documents into overlapping chunks at complete sentence boundaries while preserving exact substring spans."""
 
     def __init__(
         self,
@@ -75,36 +121,6 @@ class DocumentChunker:
         self.split_by_sentences = split_by_sentences
         self.enable_contextual = enable_contextual
 
-    def _find_split_point(self, text: str, target_end: int) -> int:
-        """Finds a natural boundary (paragraph, sentence, or word) near target_end."""
-        if target_end >= len(text):
-            return len(text)
-
-        search_window = text[max(0, target_end - 100) : min(len(text), target_end + 50)]
-        offset = max(0, target_end - 100)
-
-        # 1. Paragraph boundary (\n\n)
-        pos = search_window.rfind("\n\n")
-        if pos != -1 and offset + pos > 0:
-            return offset + pos + 2
-
-        # 2. Sentence boundary (. , ? , ! , 。, ！, ？)
-        delimiters = [". ", "? ", "! ", "。\n", "。", "！", "？", "\n"]
-        best_pos = -1
-        for d in delimiters:
-            pos = search_window.rfind(d)
-            if pos > best_pos:
-                best_pos = pos + len(d)
-        if best_pos != -1 and offset + best_pos > 0:
-            return offset + best_pos
-
-        # 3. Space boundary
-        pos = search_window.rfind(" ")
-        if pos != -1 and offset + pos > 0:
-            return offset + pos + 1
-
-        return target_end
-
     def chunk_document(
         self,
         doc_id: str,
@@ -112,7 +128,10 @@ class DocumentChunker:
         metadata: dict[str, Any] | None = None,
         lang: str | None = None,
     ) -> list[DocumentChunk]:
-        """Chunks a document text into DocumentChunk instances with exact slice tracking."""
+        """Chunks a document text into DocumentChunk instances with exact slice tracking.
+
+        Guarantees that chunks never cut across words or mid-sentence.
+        """
         cleaned_text = normalize_text(text)
         if not cleaned_text:
             return []
@@ -145,23 +164,31 @@ class DocumentChunker:
                 )
             ]
 
+        # Use sentence-aware splitting to avoid cutting across sentences
+        sentence_spans = split_sentences_with_spans(cleaned_text, lang=doc_lang)
+        if not sentence_spans:
+            return []
+
         chunks: list[DocumentChunk] = []
-        start = 0
+        i = 0
+        n_sents = len(sentence_spans)
         chunk_idx = 0
-        total_len = len(cleaned_text)
 
-        while start < total_len:
-            raw_end = min(start + self.max_chunk_size, total_len)
-            if raw_end < total_len and self.split_by_sentences:
-                end = self._find_split_point(cleaned_text, raw_end)
-            else:
-                end = raw_end
+        while i < n_sents:
+            start_char = sentence_spans[i][0]
+            j = i
+            # Accumulate full sentences until max_chunk_size is reached
+            while j < n_sents:
+                cand_end_char = sentence_spans[j][1]
+                cand_len = cand_end_char - start_char
+                if cand_len > self.max_chunk_size and j > i:
+                    break
+                j += 1
 
-            # Ensure progress
-            if end <= start:
-                end = min(start + self.max_chunk_size, total_len)
-
-            chunk_slice = cleaned_text[start:end].strip()
+            # Chunk spans from start of sentence i to end of sentence j-1
+            chunk_start = sentence_spans[i][0]
+            chunk_end = sentence_spans[j - 1][1]
+            chunk_slice = cleaned_text[chunk_start:chunk_end].strip()
 
             if len(chunk_slice) >= self.min_chunk_size:
                 ctx_text = (
@@ -179,8 +206,8 @@ class DocumentChunker:
                         chunk_id=f"{doc_id}__c{chunk_idx}",
                         doc_id=doc_id,
                         chunk_text=chunk_slice,
-                        char_start=start,
-                        char_end=end,
+                        char_start=chunk_start,
+                        char_end=chunk_end,
                         lang=doc_lang,
                         contextual_text=ctx_text,
                         metadata=meta,
@@ -188,13 +215,23 @@ class DocumentChunker:
                 )
                 chunk_idx += 1
 
-            if end >= total_len:
+            if j >= n_sents:
                 break
 
-            # Advance with overlap
-            next_start = end - self.chunk_overlap
-            if next_start <= start:
-                next_start = end
-            start = next_start
+            # Calculate overlap by stepping back complete sentences
+            next_i = j
+            overlap_accum = 0
+            for k in range(j - 1, i, -1):
+                sent_len = sentence_spans[k][1] - sentence_spans[k][0]
+                if overlap_accum + sent_len <= self.chunk_overlap:
+                    overlap_accum += sent_len
+                    next_i = k
+                else:
+                    break
+
+            # Ensure forward progress
+            if next_i <= i:
+                next_i = i + 1
+            i = next_i
 
         return chunks
