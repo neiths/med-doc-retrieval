@@ -21,6 +21,27 @@ BOILERPLATE_PATTERNS = [
 COMPILED_BOILERPLATE = [re.compile(p) for p in BOILERPLATE_PATTERNS]
 
 
+def load_external_boilerplate_patterns() -> list[re.Pattern]:
+    """Loads additional regex patterns from configs/boilerplate_patterns.yaml if available."""
+    from pathlib import Path
+    config_file = Path("configs/boilerplate_patterns.yaml")
+    extra_patterns = []
+    if config_file.exists():
+        try:
+            import yaml
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if data and "patterns" in data:
+                    for p in data["patterns"]:
+                        try:
+                            extra_patterns.append(re.compile(p))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return extra_patterns
+
+
 def fix_mojibake(text: str) -> str:
     """Detects and repairs UTF-8 bytes mistakenly decoded as GB18030 in Chinese articles."""
     if not text:
@@ -42,6 +63,8 @@ def clean_boilerplate(text: str) -> str:
     if not text:
         return ""
 
+    all_patterns = COMPILED_BOILERPLATE + load_external_boilerplate_patterns()
+
     lines = text.split("\n")
     cleaned_lines = []
     for line in lines:
@@ -49,7 +72,7 @@ def clean_boilerplate(text: str) -> str:
         if not stripped:
             continue
         # Drop lines that match boilerplate patterns
-        if any(pat.match(stripped) for pat in COMPILED_BOILERPLATE):
+        if any(pat.match(stripped) for pat in all_patterns):
             continue
         cleaned_lines.append(stripped)
 
