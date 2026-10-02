@@ -208,6 +208,24 @@ def main():
         query_parquet = Path("data/raw/vibio_mir/query.parquet")
         if query_parquet.exists():
             queries_path = query_parquet
+        else:
+            logger.info("Queries file not found locally. Auto-downloading query.parquet from Hugging Face (AIGuruTinix/ViBioMIR)...")
+            try:
+                from huggingface_hub import hf_hub_download
+
+                query_parquet.parent.mkdir(parents=True, exist_ok=True)
+                downloaded = hf_hub_download(
+                    repo_id="AIGuruTinix/ViBioMIR",
+                    filename="query.parquet",
+                    repo_type="dataset",
+                    local_dir=str(query_parquet.parent),
+                )
+                queries_path = Path(downloaded)
+                logger.info(f"Successfully downloaded queries to: {queries_path}")
+            except Exception as e:
+                logger.error(f"Could not auto-download queries: {e}")
+                raise FileNotFoundError(f"Queries file not found at {args.queries} and auto-download failed.")
+
 
     indices_dir = Path("data/indices")
     rebuild = not args.skip_build_index
