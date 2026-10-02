@@ -27,6 +27,7 @@ dependencies = [
     "typer>=0.12.0",
     "sacremoses>=0.1.1",
     "qdrant-client>=1.9.0",
+    "boto3>=1.43.107",
 ]
 
 [project.optional-dependencies]

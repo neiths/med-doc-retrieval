@@ -98,10 +98,22 @@ class MedicalRetrievalPipeline:
         # 1. Load articles
         logger.info(f"Loading articles from {art_path}...")
         articles = []
-        with open(art_path, encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    articles.append(json.loads(line))
+        if art_path.suffix == ".parquet" or art_path.is_dir():
+            import pyarrow.parquet as pq
+            if art_path.is_dir():
+                parquet_files = sorted(art_path.glob("*.parquet"))
+                if not parquet_files:
+                    raise FileNotFoundError(f"No .parquet files found in directory {art_path}")
+                logger.info(f"Reading {len(parquet_files)} Parquet shards from {art_path}...")
+                table = pq.read_table(parquet_files, columns=["doc_id", "url", "title", "text", "lang"])
+            else:
+                table = pq.read_table(art_path, columns=["doc_id", "url", "title", "text", "lang"])
+            articles = table.to_pylist()
+        else:
+            with open(art_path, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        articles.append(json.loads(line))
 
         logger.info(f"Loaded {len(articles)} documents. Starting chunking...")
 
