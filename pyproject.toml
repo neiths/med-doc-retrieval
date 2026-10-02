@@ -28,6 +28,7 @@ dependencies = [
     "sacremoses>=0.1.1",
     "qdrant-client>=1.9.0",
     "boto3>=1.43.107",
+    "streamlit>=1.64.0",
 ]
 
 [project.optional-dependencies]
