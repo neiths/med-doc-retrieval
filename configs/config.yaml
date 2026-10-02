@@ -24,7 +24,7 @@ chunking:
 
 embedding:
   model_name: "BAAI/bge-m3"
-  batch_size: 16
+  batch_size: 32
   max_length: 512
   normalize_embeddings: true
   device: "auto"            # "cuda", "cpu", or "auto"
@@ -32,7 +32,7 @@ embedding:
   return_sparse: true       # Generate BGE-M3 native lexical sparse weights for Qdrant
 
 retrieval:
-  engine: "qdrant"          # "qdrant" (embedded local storage) or "faiss"
+  engine: "faiss"           # "faiss" (high performance, 1.3GB RAM) or "qdrant"
   qdrant_path: "data/indices/qdrant_db"
   collection_name: "medical_chunks"
   dense_top_k: 50
@@ -46,7 +46,7 @@ retrieval:
 reranker:
   enabled: true
   model_name: "BAAI/bge-reranker-large"
-  batch_size: 16
+  batch_size: 32
   device: "auto"
   top_k_chunks: 10          # Maximum number of chunks to select per query
   top_k_docs: 5             # Maximum distinct documents to select per query
@@ -64,7 +64,7 @@ query_translation:
 
 pubmed:
   enabled: true
-  max_candidates_per_query: 30
+  max_candidates_per_query: 15
   source_api: "europe_pmc"  # "europe_pmc", "pubtator", "ncbi", or "hybrid"
   cache_file: "data/processed/pubmed_cache.jsonl"
 

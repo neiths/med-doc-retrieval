@@ -224,6 +224,7 @@ data/processed/*
 !data/processed/.gitkeep
 data/indices/*
 !data/indices/.gitkeep
+data/mock/indices/*
 outputs/*
 !outputs/.gitkeep
 !outputs/submissions/.gitkeep

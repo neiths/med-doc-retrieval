@@ -24,6 +24,7 @@ def run_mock_evaluation(
 ):
     config = load_config("configs/config.yaml")
     config.retrieval.collection_name = collection_name
+    config.paths.indices_dir = "data/mock/indices"
     # Pure local retrieval benchmark on the mock corpus
     config.pubmed.enabled = False
 
@@ -31,13 +32,20 @@ def run_mock_evaluation(
     pipeline = MedicalRetrievalPipeline(config=config)
 
     # 1. Indexing
-    if reindex or pipeline.qdrant_index is None or pipeline.qdrant_index.count() == 0:
-        console.print(f"[bold yellow]Indexing mock documents from {articles_file}...[/bold yellow]")
-        pipeline.build_indices(articles_file=articles_file)
-
-    console.print(
-        f"[green]Total chunks in Qdrant collection '{collection_name}': {pipeline.qdrant_index.count()}[/green]"
-    )
+    if config.retrieval.engine == "qdrant":
+        if reindex or pipeline.qdrant_index is None or pipeline.qdrant_index.count() == 0:
+            console.print(f"[bold yellow]Indexing mock documents from {articles_file}...[/bold yellow]")
+            pipeline.build_indices(articles_file=articles_file, output_indices_dir=config.paths.indices_dir)
+        console.print(
+            f"[green]Total chunks in Qdrant collection '{collection_name}': {pipeline.qdrant_index.count()}[/green]"
+        )
+    else:
+        if reindex or pipeline.dense_index is None:
+            console.print(f"[bold yellow]Indexing mock documents from {articles_file}...[/bold yellow]")
+            pipeline.build_indices(articles_file=articles_file, output_indices_dir=config.paths.indices_dir)
+            pipeline.load_indices(config.paths.indices_dir)
+        total_chunks = pipeline.dense_index.index.ntotal if pipeline.dense_index else 0
+        console.print(f"[green]Total chunks in FAISS index: {total_chunks}[/green]")
 
     # 2. Load Queries and Ground Truth
     with open(queries_file, encoding="utf-8") as f:

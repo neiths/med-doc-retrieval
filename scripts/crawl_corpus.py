@@ -149,32 +149,43 @@ def load_candidate_urls(
     return interleaved_items
 
 
-def get_already_scraped_ids(files: list[Path]) -> set[str]:
-    """Reads existing doc_ids from one or more JSONL files for instant resumability."""
+def get_already_scraped_ids(
+    output_file: Path,
+    resume_from: list[Path] | Path | None = None,
+) -> set[str]:
+    """Reads existing doc_ids from output JSONL and optional resume_from files for instant resumability."""
     existing_ids = set()
-    for fpath in files:
-        if not fpath.exists():
-            continue
-        try:
+    files_to_check: list[Path] = []
+    if resume_from:
+        if isinstance(resume_from, (str, Path)):
+            files_to_check.append(Path(resume_from))
+        else:
+            files_to_check.extend([Path(p) for p in resume_from])
+    if output_file.exists():
+        files_to_check.append(output_file)
+
+    for fpath in files_to_check:
+        if fpath.exists():
+            count = 0
             with open(fpath, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         try:
                             rec = json.loads(line)
-                            if "doc_id" in rec:
-                                existing_ids.add(str(rec["doc_id"]))
+                            did = str(rec.get("doc_id") or rec.get("id"))
+                            if did:
+                                existing_ids.add(did)
+                                count += 1
                         except Exception:
                             pass
-            logger.info(f"Loaded {len(existing_ids):,} existing doc_ids from {fpath}")
-        except Exception as e:
-            logger.warning(f"Failed to read checkpoint {fpath}: {e}")
+            logger.info(f"Loaded {count:,} existing doc_ids from checkpoint {fpath}")
     return existing_ids
 
 
 async def run_crawler_pipeline(
     items: list[dict[str, Any]],
     output_file: Path,
-    resume_from: list[Path] | None = None,
+    resume_from: list[Path] | Path | None = None,
     concurrency: int = 15,
     timeout_seconds: int = 15,
     max_retries: int = 2,
@@ -182,18 +193,27 @@ async def run_crawler_pipeline(
     max_delay: float = 0.6,
     flush_interval: int = 50,
 ):
-    """Executes asynchronous crawling using a fixed-size worker pool and buffered file writing."""
+    """Executes asynchronous crawling using a fixed-size worker pool, polite delay, and buffered writing."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    check_files = [output_file]
+
+    # If resume_from points to a previous version of the SAME shard file and output_file is empty / new,
+    # copy existing data first so final output has everything in one place.
     if resume_from:
-        check_files.extend(resume_from)
-    existing_ids = get_already_scraped_ids(check_files)
+        resume_paths = [Path(resume_from)] if isinstance(resume_from, (str, Path)) else [Path(p) for p in resume_from]
+        for rp in resume_paths:
+            if rp.exists() and rp.resolve() != output_file.resolve() and rp.name == output_file.name:
+                if not output_file.exists() or output_file.stat().st_size == 0:
+                    logger.info(f"Resuming same file {output_file.name}: copying {rp} to {output_file}...")
+                    import shutil
+                    shutil.copyfile(rp, output_file)
+
+    existing_ids = get_already_scraped_ids(output_file, resume_from=resume_from)
 
     items_to_crawl = [it for it in items if str(it.get("id")) not in existing_ids]
 
     if existing_ids:
         logger.info(
-            f"Resume checkpoint: {len(existing_ids):,} articles already saved across {len(check_files)} file(s). "
+            f"Resume checkpoint: {len(existing_ids):,} total unique articles skipped. "
             f"Remaining to crawl: {len(items_to_crawl):,}."
         )
     else:
@@ -233,9 +253,10 @@ async def run_crawler_pipeline(
                 queue.task_done()
                 break
             try:
-                # Add small jitter between min_delay and max_delay
+                # Polite randomized sleep to avoid strict lockstep bursts and anti-bot rate-limits
                 if max_delay > 0:
-                    await asyncio.sleep(random.uniform(min_delay, max_delay))
+                    sleep_sec = random.uniform(min_delay, max_delay)
+                    await asyncio.sleep(sleep_sec)
                 result = await scraper.process_item(client, it)
                 if result:
                     await write_queue.put(result)
@@ -334,22 +355,22 @@ def main():
     )
     parser.add_argument(
         "--resume-from",
-        nargs="*",
         type=Path,
+        nargs="*",
         default=None,
-        help="One or more existing JSONL files to skip already-scraped doc_ids (e.g. from previous Kaggle datasets).",
+        help="Path(s) to previous crawled JSONL (e.g. /kaggle/input/dataset/crawled_shard_1.jsonl) to resume from.",
     )
     parser.add_argument(
         "--min-delay",
         type=float,
         default=0.2,
-        help="Minimum delay between requests to the same domain (in seconds, default: 0.2).",
+        help="Minimum polite sleep delay in seconds between requests (default: 0.2).",
     )
     parser.add_argument(
         "--max-delay",
         type=float,
         default=0.6,
-        help="Maximum delay jitter between requests (in seconds, default: 0.6).",
+        help="Maximum polite sleep delay in seconds between requests (default: 0.6).",
     )
     parser.add_argument(
         "--limit",
