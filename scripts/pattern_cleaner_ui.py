@@ -1,4 +1,4 @@
-"""Interactive Streamlit UI for discovering, inspecting, and testing boilerplate regex patterns on crawled corpus."""
+"""Interactive Streamlit UI: Select repetitive junk lines with checkboxes, auto-generate Regex, and save without writing code."""
 
 import re
 from collections import Counter
@@ -14,14 +14,14 @@ from src.ingestion.chunker import DocumentChunker
 PATTERNS_CONFIG_FILE = Path("configs/boilerplate_patterns.yaml")
 
 st.set_page_config(
-    page_title="ViBioMIR Boilerplate Inspector & Pattern Studio",
-    page_icon="🧹",
+    page_title="ViBioMIR Boilerplate Pattern Studio",
+    page_icon="🎯",
     layout="wide",
 )
 
-st.title("🧹 ViBioMIR Boilerplate Discovery & Regex Studio")
+st.title("🎯 ViBioMIR Click-to-Clean Studio")
 st.markdown(
-    "Khám phá các dòng lặp lại nhiều nhất trong corpus, kiểm thử biểu thức chính quy (Regex) và làm sạch dữ liệu trong thời gian thực."
+    "**Không cần viết Regex!** Bạn chỉ cần tích chọn các câu rác lặp lại, hệ thống sẽ tự động tổng hợp danh sách và sinh biểu thức Regex làm sạch dữ liệu."
 )
 
 
@@ -50,7 +50,6 @@ def extract_line_frequencies(df: pd.DataFrame, lang_filter: str, domain_filter: 
         lines = set()
         for raw_line in text.split("\n"):
             line = raw_line.strip()
-            # Ignore very short lines or empty lines
             if len(line) >= 4:
                 line_counter[line] += 1
                 lines.add(line)
@@ -58,15 +57,49 @@ def extract_line_frequencies(df: pd.DataFrame, lang_filter: str, domain_filter: 
             doc_counter[line] += 1
 
     records = []
-    for line, total_cnt in line_counter.most_common(2000):
+    for line, total_cnt in line_counter.most_common(3000):
+        # Check if already caught by current cleaner
+        already_caught = any(p.match(line) for p in COMPILED_BOILERPLATE)
         records.append({
-            "line_text": line,
-            "total_count": total_cnt,
-            "doc_count": doc_counter[line],
-            "char_len": len(line),
+            "Chọn_Xóa": False,
+            "Nội_dung_dòng": line,
+            "Số_lần_lặp": total_cnt,
+            "Số_bài_chứa": doc_counter[line],
+            "Đã_lọc_sẵn": "✅" if already_caught else "",
         })
 
     return pd.DataFrame(records), len(subset)
+
+
+def build_regex_from_phrases(phrases: list[str]) -> str:
+    """Safely escapes and combines literal phrases into a robust regex pattern."""
+    if not phrases:
+        return ""
+    escaped_patterns = []
+    for ph in phrases:
+        clean_p = ph.strip()
+        if clean_p:
+            # If line is long, take a distinctive prefix or escape the whole phrase
+            escaped = re.escape(clean_p)
+            escaped_patterns.append(escaped)
+    return r"(?i)^.*(" + "|".join(escaped_patterns) + r").*$"
+
+
+def load_saved_patterns() -> list[str]:
+    if PATTERNS_CONFIG_FILE.exists():
+        try:
+            with open(PATTERNS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                return data.get("patterns", [])
+        except Exception:
+            pass
+    return []
+
+
+def save_patterns(patterns: list[str]):
+    PATTERNS_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(PATTERNS_CONFIG_FILE, "w", encoding="utf-8") as f:
+        yaml.safe_dump({"patterns": patterns}, f, allow_unicode=True, sort_keys=False)
 
 
 # Sidebar Configuration
@@ -88,9 +121,8 @@ available_domains = ["all"] + sorted(df_corpus["domain"].dropna().unique().tolis
 
 selected_lang = st.sidebar.selectbox("Ngôn ngữ:", available_langs, index=0)
 selected_domain = st.sidebar.selectbox("Tên miền (Domain):", available_domains, index=0)
-
-min_freq = st.sidebar.slider("Tần suất xuất hiện tối thiểu:", min_value=2, max_value=500, value=10)
-search_kw = st.sidebar.text_input("Tìm từ khóa trong dòng:", value="")
+min_freq = st.sidebar.slider("Tần suất xuất hiện tối thiểu:", min_value=2, max_value=500, value=5)
+search_kw = st.sidebar.text_input("Tìm kiếm từ khóa trong dòng:", value="")
 
 # Load line frequency
 df_lines, total_docs = extract_line_frequencies(df_corpus, selected_lang, selected_domain)
@@ -98,89 +130,76 @@ df_lines, total_docs = extract_line_frequencies(df_corpus, selected_lang, select
 st.sidebar.markdown(f"**Tổng số bài phân tích:** {total_docs:,}")
 st.sidebar.markdown(f"**Tổng số dòng khác biệt:** {len(df_lines):,}")
 
-# Tabs: 1. Line Frequencies, 2. Regex Sandbox, 3. Side-by-Side Cleaner
-tab1, tab2, tab3 = st.tabs([
-    "📊 Tần Suất Dòng (Frequent Lines)",
-    "🧪 Thử Nghiệm Regex (Regex Sandbox)",
+# Tabs
+tab1, tab2 = st.tabs([
+    "📋 Tích Chọn Dòng Rác & Sinh Regex Tự Động",
     "🔍 So Sánh Trước & Sau (Before / After)",
 ])
 
-# ----------------- TAB 1: LINE FREQUENCIES -----------------
+# ----------------- TAB 1: SELECT JUNK LINES -----------------
 with tab1:
-    st.subheader("1. Các dòng xuất hiện nhiều nhất (Dấu hiệu của Boilerplate)")
-    st.caption("Các dòng xuất hiện ở nhiều bài viết khác nhau thường là menu, hotline, footer, quảng cáo.")
+    st.subheader("1. Tích chọn các dòng rác (Boilerplate / Menu / Footer / Hotline)")
+    st.caption("Các dòng dưới đây được sắp xếp theo số lần xuất hiện nhiều nhất. Hãy tích vào ô `Chọn_Xóa` cho các dòng bạn muốn loại bỏ:")
 
-    filtered_lines = df_lines[df_lines["total_count"] >= min_freq]
+    display_df = df_lines[df_lines["Số_lần_lặp"] >= min_freq].copy()
     if search_kw:
-        filtered_lines = filtered_lines[
-            filtered_lines["line_text"].str.contains(search_kw, case=False, na=False)
+        display_df = display_df[
+            display_df["Nội_dung_dòng"].str.contains(search_kw, case=False, na=False)
         ]
 
-    st.dataframe(
-        filtered_lines,
-        use_container_width=True,
+    # Data editor with checkboxes
+    edited_df = st.data_editor(
+        display_df,
         column_config={
-            "line_text": st.column_config.TextColumn("Nội dung dòng", width="large"),
-            "total_count": st.column_config.NumberColumn("Tổng lần xuất hiện", width="small"),
-            "doc_count": st.column_config.NumberColumn("Số bài chứa dòng này", width="small"),
-            "char_len": st.column_config.NumberColumn("Độ dài", width="small"),
+            "Chọn_Xóa": st.column_config.CheckboxColumn(" Chọn Xóa", help="Tích chọn dòng này là rác", default=False),
+            "Nội_dung_dòng": st.column_config.TextColumn("Nội dung dòng văn bản", width="large"),
+            "Số_lần_lặp": st.column_config.NumberColumn("Số lần lặp", width="small"),
+            "Số_bài_chứa": st.column_config.NumberColumn("Số bài chứa", width="small"),
+            "Đã_lọc_sẵn": st.column_config.TextColumn("Đã lọc sẵn", width="small"),
         },
-        height=500,
+        disabled=["Nội_dung_dòng", "Số_lần_lặp", "Số_bài_chứa", "Đã_lọc_sẵn"],
+        hide_index=True,
+        use_container_width=True,
+        height=450,
     )
 
-    st.markdown("💡 **Mẹo**: Nhìn vào bảng trên, bạn có thể copy các cụm từ lặp lại nhiều để dán vào Tab **Thử Nghiệm Regex** bên cạnh.")
+    # Get selected phrases
+    selected_rows = edited_df[edited_df["Chọn_Xóa"] == True]
+    selected_phrases = selected_rows["Nội_dung_dòng"].tolist()
 
-# ----------------- TAB 2: REGEX SANDBOX -----------------
+    st.markdown("---")
+    st.subheader(f"2. Kết Quả Tự Động Tổng Hợp ({len(selected_phrases)} dòng đã chọn)")
+
+    if selected_phrases:
+        col_list, col_regex = st.columns([1, 1])
+
+        with col_list:
+            st.markdown("##### 📄 Danh sách các cụm từ đã chọn (Dùng để Copy gửi tôi):")
+            formatted_list = "\n".join(f"- {p}" for p in selected_phrases)
+            st.text_area("Copy danh sách này:", value=formatted_list, height=220)
+
+        with col_regex:
+            st.markdown("##### ⚡ Biểu thức Regex tự động sinh (Hệ thống tự tạo):")
+            generated_regex = build_regex_from_phrases(selected_phrases)
+            st.code(generated_regex, language="python")
+
+            if st.button("💾 Lưu các mẫu này vào configs/boilerplate_patterns.yaml", type="primary"):
+                existing = load_saved_patterns()
+                updated = list(dict.fromkeys(existing + [generated_regex]))
+                save_patterns(updated)
+                st.success(f" Đã lưu thành công {len(updated)} pattern vào configs/boilerplate_patterns.yaml!")
+    else:
+        st.info("👉 Hãy tích vào ít nhất 1 ô `Chọn_Xóa` ở bảng trên để hệ thống tự động sinh Regex và danh sách cho bạn.")
+
+# ----------------- TAB 2: BEFORE / AFTER INSPECTOR -----------------
 with tab2:
-    st.subheader("2. Kiểm tra Regex trên tập dữ liệu")
-    col_input, col_info = st.columns([2, 1])
+    st.subheader("3. So sánh trực quan văn bản Trước vs Sau khi làm sạch")
 
-    with col_input:
-        custom_regex = st.text_input(
-            "Nhập biểu thức Regex cần kiểm tra:",
-            value=r"(?i)^.*(hotline|đặt lịch khám|bản quyền|xem thêm:|chỉ mang tính chất tham khảo).*$",
-        )
-
-    with col_info:
-        st.markdown("**Các mẫu có sẵn trong hệ thống:**")
-        st.write(f"Hiện có `{len(BOILERPLATE_PATTERNS)}` pattern đang được áp dụng trong `cleaner.py`.")
-
-    if custom_regex:
-        try:
-            pattern = re.compile(custom_regex)
-            # Find all matched lines in df_lines
-            matched_mask = df_lines["line_text"].apply(lambda s: bool(pattern.match(s)))
-            df_matched = df_lines[matched_mask]
-
-            total_removed_instances = df_matched["total_count"].sum()
-            docs_affected = df_matched["doc_count"].max() if not df_matched.empty else 0
-
-            st.success(
-                f"✅ **Khớp thành công!** Pattern này khớp **{len(df_matched):,} dòng khác nhau**, "
-                f"giúp loại bỏ **{total_removed_instances:,} lần xuất hiện rác**."
-            )
-
-            st.markdown("##### Danh sách các dòng bị loại bỏ bởi Regex này:")
-            st.dataframe(
-                df_matched[["line_text", "total_count", "doc_count"]],
-                use_container_width=True,
-                height=350,
-            )
-
-        except re.error as e:
-            st.error(f"❌ Cú pháp Regex không hợp lệ: {e}")
-
-# ----------------- TAB 3: SIDE BY SIDE INSPECTOR -----------------
-with tab3:
-    st.subheader("3. So sánh trực quan văn bản và chunk Trước vs Sau khi làm sạch")
-
-    col_select, col_slider = st.columns([2, 2])
-    with col_select:
-        # Choose article
-        sample_doc_ids = df_corpus["doc_id"].tolist()
-        selected_doc_id = st.selectbox("Chọn ID bài viết để soi:", sample_doc_ids[:500], index=0)
-
-    with col_slider:
+    sample_doc_ids = df_corpus["doc_id"].tolist()
+    col_sel, col_slide = st.columns([2, 2])
+    with col_sel:
+        selected_doc_id = st.selectbox("Chọn ID bài viết để kiểm tra:", sample_doc_ids[:500], index=0)
+    with col_slide:
         chunk_size = st.slider("Max chunk size:", min_value=200, max_value=800, value=400, step=50)
 
     sample_row = df_corpus[df_corpus["doc_id"] == selected_doc_id].iloc[0]
@@ -191,44 +210,39 @@ with tab3:
 
     st.markdown(f"**Tiêu đề:** {title} | **Nguồn:** `{domain}` | **Ngôn ngữ:** `{lang}`")
 
-    # Apply regex filter live
-    cleaned_lines = []
-    test_pattern = None
-    if custom_regex:
-        try:
-            test_pattern = re.compile(custom_regex)
-        except Exception:
-            pass
+    # Clean text using compiled boilerplate + newly selected phrases
+    active_patterns = list(COMPILED_BOILERPLATE)
+    if selected_phrases:
+        temp_rgx = build_regex_from_phrases(selected_phrases)
+        if temp_rgx:
+            active_patterns.append(re.compile(temp_rgx))
 
+    cleaned_lines = []
     for l in raw_text.split("\n"):
         stripped = l.strip()
         if not stripped:
             continue
-        # Check standard boilerplate or custom regex
-        if any(p.match(stripped) for p in COMPILED_BOILERPLATE):
-            continue
-        if test_pattern and test_pattern.match(stripped):
+        if any(p.match(stripped) for p in active_patterns):
             continue
         cleaned_lines.append(stripped)
 
     clean_text = "\n".join(cleaned_lines)
 
     col_raw, col_clean = st.columns(2)
-
     with col_raw:
         st.markdown(f"##### ❌ Văn bản gốc ({len(raw_text):,} ký tự)")
         st.text_area("Raw Text", value=raw_text, height=450, disabled=True)
 
     with col_clean:
-        st.markdown(f"#####  Văn bản đã làm sạch ({len(clean_text):,} ký tự)")
+        st.markdown(f"#####  Văn bản sau khi làm sạch ({len(clean_text):,} ký tự)")
         st.text_area("Cleaned Text", value=clean_text, height=450, disabled=True)
 
     st.markdown("---")
-    st.subheader("🧩 Xem trước kết quả tách Chunk (Sentence-Aware)")
+    st.subheader("🧩 Xem trước kết quả tách Chunk hoàn chỉnh câu")
     chunker = DocumentChunker(max_chunk_size=chunk_size, chunk_overlap=80)
     chunks = chunker.chunk_document(doc_id=str(selected_doc_id), text=clean_text, lang=lang)
 
-    st.write(f"Đã tách thành **{len(chunks)} chunks** hoàn chỉnh câu:")
+    st.write(f"Đã tách thành **{len(chunks)} chunks** nguyên vẹn câu:")
     for idx, c in enumerate(chunks):
         with st.expander(f"Chunk {idx+1} ({len(c.chunk_text)} ký tự) | [{c.char_start}:{c.char_end}]"):
             st.code(c.chunk_text, language="text")
