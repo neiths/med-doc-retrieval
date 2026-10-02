@@ -113,6 +113,73 @@ def build_regex_from_phrases(phrases: list[str]) -> str:
     return r"(?i)^.*(" + "|".join(escaped_patterns) + r").*$"
 
 
+def build_smart_generalized_regex(phrases: list[str], generalize: bool = True) -> list[str]:
+    """Analyzes selected phrases. If generalize=True, condenses repetitive patterns
+    (dates, newspapers, ministries, phones, tags) into high-level regex templates.
+    Returns a list of clean regex patterns.
+    """
+    if not phrases:
+        return []
+    if not generalize:
+        escaped = [re.escape(p.strip()) for p in phrases if p.strip()]
+        return [r"(?i)^.*(" + "|".join(escaped) + r").*$"] if escaped else []
+
+    generalized_patterns = []
+    unmatched_phrases = []
+
+    has_date = False
+    has_newspaper = False
+    has_ministry = False
+    has_phone = False
+    has_tags = False
+    has_attribution = False
+
+    date_re = re.compile(r"^(?:\d{1,2}:\d{2}\s*\|\s*)?\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}")
+    newspaper_re = re.compile(r"^\s*(?:Báo|Đài\s+PTTH|Đài\s+tiếng\s+nói|Đài\s+truyền\s+hình|Cổng\s+thông\s+tin\s+điện\s+tử)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$", re.I)
+    ministry_re = re.compile(r"^\s*(?:Bộ|Văn\s+phòng\s+Chính\s+phủ|Ủy\s+ban\s+Dân\s+tộc|Tổng\s+cục\s+Hải\s+quan|Viện\s+KSND|Ngân\s+hàng\s+nhà\s+nước)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$", re.I)
+    phone_re = re.compile(r"^\s*(?:Hotline\s*:?\s*)?(?:\+?84|0|\b1900\b)[\d\.\s-]{8,15}\s*$", re.I)
+    tag_re = re.compile(r"^\s*\{[a-zA-Z0-9_-]+\}\s*$")
+    attr_re = re.compile(r"^\s*(?:Theo|Nguồn)\s+(?:Zing|TTXVN|Vietnam\+|TNO|Suckhoedoisong|VnExpress|Dân\s+trí|Thanh\s+Niên|Thu\s+Phương).*$", re.I)
+
+    for ph in phrases:
+        p = ph.strip()
+        if not p:
+            continue
+        if date_re.search(p):
+            has_date = True
+        elif newspaper_re.match(p):
+            has_newspaper = True
+        elif ministry_re.match(p):
+            has_ministry = True
+        elif phone_re.match(p):
+            has_phone = True
+        elif tag_re.match(p):
+            has_tags = True
+        elif attr_re.match(p):
+            has_attribution = True
+        else:
+            unmatched_phrases.append(p)
+
+    if has_date:
+        generalized_patterns.append(r"^(?:\d{2}:\d{2}\s*\|\s*\d{2}/\d{2}/\d{4}|\d{2}/\d{2}/\d{4}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}).*$")
+    if has_newspaper:
+        generalized_patterns.append(r"(?i)^\s*(?:Báo|Đài\s+PTTH|Đài\s+tiếng\s+nói|Đài\s+truyền\s+hình|Cổng\s+thông\s+tin\s+điện\s+tử)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$")
+    if has_ministry:
+        generalized_patterns.append(r"(?i)^\s*(?:Bộ|Văn\s+phòng\s+Chính\s+phủ|Ủy\s+ban\s+Dân\s+tộc|Tổng\s+cục\s+Hải\s+quan|Viện\s+KSND|Ngân\s+hàng\s+nhà\s+nước)\s+[A-ZÀ-Ỹa-zà-ỹ\s.-]{2,35}$")
+    if has_phone:
+        generalized_patterns.append(r"^\s*(?:Hotline\s*:?\s*)?(?:\+?84|0|\b1900\b)[\d\.\s-]{8,15}\s*$")
+    if has_tags:
+        generalized_patterns.append(r"^\s*\{[a-zA-Z0-9_-]+\}\s*$")
+    if has_attribution:
+        generalized_patterns.append(r"(?i)^\s*(?:Theo|Nguồn)\s+(?:Zing|TTXVN|Vietnam\+|TNO|Suckhoedoisong|VnExpress|Dân\s+trí|Thanh\s+Niên|Thu\s+Phương).*$")
+
+    if unmatched_phrases:
+        escaped = [re.escape(up) for up in unmatched_phrases]
+        generalized_patterns.append(r"(?i)^.*(" + "|".join(escaped) + r").*$")
+
+    return generalized_patterns
+
+
 # Sidebar Configuration
 st.sidebar.header("⚙️ Nguồn Dữ Liệu & Bộ Lọc")
 parquet_input = st.sidebar.text_input(
@@ -179,16 +246,27 @@ with tab1:
             height=450,
         )
 
+        smart_gen = st.checkbox(
+            "✨ Quy nạp thông minh (Tự động gom nhóm ngày giờ, báo đài, cơ quan, số điện thoại...)",
+            value=True,
+            help="Tự động gom các dòng có cấu trúc tương tự (như Báo Lai Châu / Báo Lào Cai, ngày tháng, hotline) thành mẫu regex tổng quát thay vì liệt kê từng chữ.",
+        )
+
         submitted = st.form_submit_button("⚡ XÁC NHẬN & TỰ ĐỘNG SINH REGEX (Bấm sau khi chọn xong)", type="primary")
 
     if submitted:
         selected_rows = edited_df[edited_df["Chọn_Xóa"] == True]
         st.session_state["selected_phrases"] = selected_rows["Nội_dung_dòng"].tolist()
-        gen_regex = build_regex_from_phrases(st.session_state["selected_phrases"])
-        st.session_state["test_regex_input"] = gen_regex
+        gen_patterns = build_smart_generalized_regex(
+            st.session_state["selected_phrases"],
+            generalize=smart_gen,
+        )
+        st.session_state["generated_patterns"] = gen_patterns
+        st.session_state["test_regex_input"] = gen_patterns[0] if gen_patterns else ""
         st.toast(f"Đã chọn thành công {len(st.session_state['selected_phrases'])} dòng rác!", icon="🎉")
 
-    selected_phrases = st.session_state["selected_phrases"]
+    selected_phrases = st.session_state.get("selected_phrases", [])
+    patterns_to_save = st.session_state.get("generated_patterns", [])
 
     st.markdown("---")
     st.subheader(f"2. Kết Quả Tổng Hợp ({len(selected_phrases)} dòng đã chọn)")
@@ -202,22 +280,27 @@ with tab1:
             st.text_area("Copy danh sách này:", value=formatted_list, height=220)
 
         with col_regex:
-            st.markdown("##### ⚡ Biểu thức Regex tự động sinh (Hệ thống tự tạo):")
-            generated_regex = build_regex_from_phrases(selected_phrases)
-            st.code(generated_regex, language="python")
+            st.markdown(f"##### ⚡ Biểu thức Regex đã tối ưu ({len(patterns_to_save)} mẫu):")
+            if not patterns_to_save:
+                patterns_to_save = [build_regex_from_phrases(selected_phrases)]
+
+            for idx, pat in enumerate(patterns_to_save, 1):
+                if len(patterns_to_save) > 1:
+                    st.caption(f"Mẫu #{idx}:")
+                st.code(pat, language="python")
 
             col_btn1, col_btn2 = st.columns(2)
             with col_btn1:
                 if st.button("🧪 Chuyển sang Tab Sandbox để Test", type="secondary"):
-                    st.session_state["test_regex_input"] = generated_regex
+                    st.session_state["test_regex_input"] = patterns_to_save[0] if patterns_to_save else ""
                     st.info("👉 Hãy bấm sang Tab **'🧪 Sandbox Kiểm Thử Regex'** ở trên để kiểm tra kết quả!")
 
             with col_btn2:
                 if st.button("💾 Lưu vĩnh viễn vào YAML", type="primary"):
                     existing = load_saved_patterns()
-                    updated = list(dict.fromkeys(existing + [generated_regex]))
+                    updated = list(dict.fromkeys(existing + patterns_to_save))
                     save_patterns(updated)
-                    st.success(f" Đã lưu thành công vào configs/boilerplate_patterns.yaml! Lần chạy sau hệ thống sẽ tự nạp lại.")
+                    st.success(f" Đã lưu {len(patterns_to_save)} mẫu Regex vào configs/boilerplate_patterns.yaml! Lần chạy sau hệ thống sẽ tự nạp lại.")
                     st.rerun()
     else:
         st.info("👉 Hãy tích chọn các dòng ở bảng trên rồi bấm nút **'⚡ XÁC NHẬN & TỰ ĐỘNG SINH REGEX'** để tạo mẫu.")
