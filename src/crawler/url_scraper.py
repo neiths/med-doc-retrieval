@@ -34,6 +34,7 @@ class ArticleScraper:
         timeout_seconds: int = 15,
         max_retries: int = 3,
         concurrency: int = 10,
+        min_domain_interval: float = 0.3,
     ):
         self.default_user_agent = user_agent
         self.headers = {
@@ -47,7 +48,7 @@ class ArticleScraper:
         self.domain_semaphores: dict[str, asyncio.Semaphore] = defaultdict(lambda: asyncio.Semaphore(2))
         self.domain_cooldowns: dict[str, float] = {}
         self.domain_last_request: dict[str, float] = defaultdict(float)
-        self.min_domain_interval: float = 0.3
+        self.min_domain_interval: float = min_domain_interval
 
     async def fetch_url(self, client: httpx.AsyncClient, url: str) -> str | None:
         """Fetch raw HTML with per-domain rate limiting, retry logic, and cooldown backoff."""

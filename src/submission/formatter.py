@@ -9,16 +9,27 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 
+def normalize_doc_id(doc_id: Any) -> int | str:
+    """Ensures Vietnamese/Chinese corpus IDs (<= 4,420,561) are integers, and PubMed remains str/int."""
+    try:
+        val = int(doc_id)
+        if val <= 4420561:
+            return val
+        return str(doc_id)
+    except (ValueError, TypeError):
+        return str(doc_id)
+
+
 class ChunkSubmission(BaseModel):
-    doc_id: str = Field(
-        ..., description="Original document ID (Vietnamese/Chinese BTC ID or English PMID)"
+    doc_id: int | str = Field(
+        ..., description="Original document ID (Vietnamese/Chinese BTC ID as int or English PMID)"
     )
     chunk_text: str = Field(..., description="Exact extracted chunk text from the source document")
 
 
 class QuerySubmission(BaseModel):
     id: int = Field(..., description="Query integer ID")
-    relevant_docs: list[str] = Field(
+    relevant_docs: list[int | str] = Field(
         default_factory=list, description="List of predicted document IDs"
     )
     relevant_chunks: list[ChunkSubmission] = Field(
@@ -35,7 +46,16 @@ class SubmissionPackage:
         validated = []
         for idx, item in enumerate(data):
             try:
-                sub = QuerySubmission(**item)
+                # Normalize doc_ids according to BTC rule: corpus IDs as int, PubMed as str
+                norm_item = dict(item)
+                if "relevant_docs" in norm_item:
+                    norm_item["relevant_docs"] = [normalize_doc_id(d) for d in norm_item["relevant_docs"]]
+                if "relevant_chunks" in norm_item:
+                    norm_item["relevant_chunks"] = [
+                        {**c, "doc_id": normalize_doc_id(c["doc_id"])}
+                        for c in norm_item["relevant_chunks"]
+                    ]
+                sub = QuerySubmission(**norm_item)
                 validated.append(sub)
             except Exception as e:
                 raise ValueError(f"Validation failed for record at index {idx}: {item}. Error: {e}")
