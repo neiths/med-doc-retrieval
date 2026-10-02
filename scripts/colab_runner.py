@@ -164,6 +164,23 @@ def main():
         default=os.getenv("HF_TOKEN"),
         help="Optional Hugging Face access token.",
     )
+    parser.add_argument(
+        "--sync-index-to-bucket",
+        action="store_true",
+        help="Upload built indices from data/indices to HF bucket after completion.",
+    )
+    parser.add_argument(
+        "--sync-index-from-bucket",
+        action="store_true",
+        help="Download pre-built indices from HF bucket to skip embedding if available.",
+    )
+    parser.add_argument(
+        "--index-bucket-uri",
+        type=str,
+        default="hf://buckets/nieths/ViBioMIR/indices",
+        help="HF Storage Bucket URI for persisting pre-built indices.",
+    )
+
 
     args = parser.parse_args()
 
@@ -192,13 +209,38 @@ def main():
         if query_parquet.exists():
             queries_path = query_parquet
 
+    indices_dir = Path("data/indices")
+    rebuild = not args.skip_build_index
+
+    if args.sync_index_from_bucket:
+        logger.info(f"Attempting to download pre-built index from {args.index_bucket_uri} -> {indices_dir} ...")
+        indices_dir.mkdir(parents=True, exist_ok=True)
+        hf_bin = shutil.which("hf") or str(Path(sys.executable).parent / "hf")
+        env = os.environ.copy()
+        if args.hf_token:
+            env["HF_TOKEN"] = args.hf_token
+        res = subprocess.run([hf_bin, "sync", args.index_bucket_uri, str(indices_dir)], env=env)
+        if (indices_dir / "dense_index.faiss").exists():
+            logger.info("Found pre-built FAISS index from HF bucket! Skipping rebuild.")
+            rebuild = False
+
     zip_file = run_pipeline(
         queries_file=queries_path,
         corpus_dir=corpus_target,
         submission_name=args.output_name,
         batch_size=args.batch_size,
-        rebuild_indices=not args.skip_build_index,
+        rebuild_indices=rebuild,
     )
+
+    if args.sync_index_to_bucket and indices_dir.exists():
+        logger.info(f"Uploading built index from {indices_dir} -> {args.index_bucket_uri} ...")
+        hf_bin = shutil.which("hf") or str(Path(sys.executable).parent / "hf")
+        env = os.environ.copy()
+        if args.hf_token:
+            env["HF_TOKEN"] = args.hf_token
+        subprocess.run([hf_bin, "sync", str(indices_dir), args.index_bucket_uri], env=env)
+        logger.info("Index sync to HF bucket completed successfully!")
+
 
     abs_zip = Path(zip_file).resolve()
     # If running on Colab, copy directly to /content/ for easy 1-click access
