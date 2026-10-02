@@ -1,4 +1,4 @@
-"""Interactive Streamlit UI: Select repetitive junk lines with checkboxes, auto-generate Regex, and save without writing code."""
+"""Interactive Streamlit UI: Select multiple junk lines at once using st.form to eliminate lag, then auto-generate Regex."""
 
 import re
 from collections import Counter
@@ -14,18 +14,22 @@ from src.ingestion.chunker import DocumentChunker
 PATTERNS_CONFIG_FILE = Path("configs/boilerplate_patterns.yaml")
 
 st.set_page_config(
-    page_title="ViBioMIR Boilerplate Pattern Studio",
-    page_icon="🎯",
+    page_title="ViBioMIR Batch Boilerplate Studio",
+    page_icon="⚡",
     layout="wide",
 )
 
-st.title("🎯 ViBioMIR Click-to-Clean Studio")
+st.title("⚡ ViBioMIR Batch Click-to-Clean Studio")
 st.markdown(
-    "**Không cần viết Regex!** Bạn chỉ cần tích chọn các câu rác lặp lại, hệ thống sẽ tự động tổng hợp danh sách và sinh biểu thức Regex làm sạch dữ liệu."
+    "**Không bị giật lag!** Bạn có thể tích chọn hàng loạt câu rác cùng một lúc, sau đó bấm nút để hệ thống xử lý 1 lần duy nhất và tự động sinh Regex."
 )
 
+# Initialize session state for selected phrases
+if "selected_phrases" not in st.session_state:
+    st.session_state["selected_phrases"] = []
 
-@st.cache_data(show_spinner="Đang đọc dữ liệu Parquet corpus...")
+
+@st.cache_data(show_spinner="Đang nạp dữ liệu Parquet corpus...")
 def load_corpus_data(parquet_path: str) -> pd.DataFrame:
     p = Path(parquet_path)
     if not p.exists():
@@ -57,8 +61,7 @@ def extract_line_frequencies(df: pd.DataFrame, lang_filter: str, domain_filter: 
             doc_counter[line] += 1
 
     records = []
-    for line, total_cnt in line_counter.most_common(3000):
-        # Check if already caught by current cleaner
+    for line, total_cnt in line_counter.most_common(2000):
         already_caught = any(p.match(line) for p in COMPILED_BOILERPLATE)
         records.append({
             "Chọn_Xóa": False,
@@ -79,7 +82,6 @@ def build_regex_from_phrases(phrases: list[str]) -> str:
     for ph in phrases:
         clean_p = ph.strip()
         if clean_p:
-            # If line is long, take a distinctive prefix or escape the whole phrase
             escaped = re.escape(clean_p)
             escaped_patterns.append(escaped)
     return r"(?i)^.*(" + "|".join(escaped_patterns) + r").*$"
@@ -121,6 +123,7 @@ available_domains = ["all"] + sorted(df_corpus["domain"].dropna().unique().tolis
 
 selected_lang = st.sidebar.selectbox("Ngôn ngữ:", available_langs, index=0)
 selected_domain = st.sidebar.selectbox("Tên miền (Domain):", available_domains, index=0)
+display_limit = st.sidebar.select_slider("Số lượng dòng hiển thị:", options=[50, 100, 200, 500, 1000], value=100)
 min_freq = st.sidebar.slider("Tần suất xuất hiện tối thiểu:", min_value=2, max_value=500, value=5)
 search_kw = st.sidebar.text_input("Tìm kiếm từ khóa trong dòng:", value="")
 
@@ -132,14 +135,17 @@ st.sidebar.markdown(f"**Tổng số dòng khác biệt:** {len(df_lines):,}")
 
 # Tabs
 tab1, tab2 = st.tabs([
-    "📋 Tích Chọn Dòng Rác & Sinh Regex Tự Động",
+    "📋 Chọn Hàng Loạt Dòng Rác & Sinh Regex",
     "🔍 So Sánh Trước & Sau (Before / After)",
 ])
 
-# ----------------- TAB 1: SELECT JUNK LINES -----------------
+# ----------------- TAB 1: BATCH SELECTION FORM -----------------
 with tab1:
-    st.subheader("1. Tích chọn các dòng rác (Boilerplate / Menu / Footer / Hotline)")
-    st.caption("Các dòng dưới đây được sắp xếp theo số lần xuất hiện nhiều nhất. Hãy tích vào ô `Chọn_Xóa` cho các dòng bạn muốn loại bỏ:")
+    st.subheader("1. Tích chọn hàng loạt dòng rác (Không bị tải lại trang)")
+    st.caption(
+        "💡 **Cách dùng:** Tích chọn thoải mái bao nhiêu dòng tùy ý ở bảng dưới mà không lo bị giật lag. "
+        "Khi chọn xong hết, bấm nút **'⚡ XÁC NHẬN & TỰ ĐỘNG SINH REGEX'** ở cuối bảng."
+    )
 
     display_df = df_lines[df_lines["Số_lần_lặp"] >= min_freq].copy()
     if search_kw:
@@ -147,36 +153,45 @@ with tab1:
             display_df["Nội_dung_dòng"].str.contains(search_kw, case=False, na=False)
         ]
 
-    # Data editor with checkboxes
-    edited_df = st.data_editor(
-        display_df,
-        column_config={
-            "Chọn_Xóa": st.column_config.CheckboxColumn(" Chọn Xóa", help="Tích chọn dòng này là rác", default=False),
-            "Nội_dung_dòng": st.column_config.TextColumn("Nội dung dòng văn bản", width="large"),
-            "Số_lần_lặp": st.column_config.NumberColumn("Số lần lặp", width="small"),
-            "Số_bài_chứa": st.column_config.NumberColumn("Số bài chứa", width="small"),
-            "Đã_lọc_sẵn": st.column_config.TextColumn("Đã lọc sẵn", width="small"),
-        },
-        disabled=["Nội_dung_dòng", "Số_lần_lặp", "Số_bài_chứa", "Đã_lọc_sẵn"],
-        hide_index=True,
-        use_container_width=True,
-        height=450,
-    )
+    display_df = display_df.head(display_limit)
 
-    # Get selected phrases
-    selected_rows = edited_df[edited_df["Chọn_Xóa"] == True]
-    selected_phrases = selected_rows["Nội_dung_dòng"].tolist()
+    # Use st.form to completely prevent page reload on individual checkbox clicks
+    with st.form("batch_selection_form"):
+        edited_df = st.data_editor(
+            display_df,
+            column_config={
+                "Chọn_Xóa": st.column_config.CheckboxColumn(" Chọn Xóa", help="Tích chọn dòng này là rác", default=False),
+                "Nội_dung_dòng": st.column_config.TextColumn("Nội dung dòng văn bản", width="large"),
+                "Số_lần_lặp": st.column_config.NumberColumn("Số lần lặp", width="small"),
+                "Số_bài_chứa": st.column_config.NumberColumn("Số bài chứa", width="small"),
+                "Đã_lọc_sẵn": st.column_config.TextColumn("Đã lọc sẵn", width="small"),
+            },
+            disabled=["Nội_dung_dòng", "Số_lần_lặp", "Số_bài_chứa", "Đã_lọc_sẵn"],
+            hide_index=True,
+            use_container_width=True,
+            height=500,
+        )
+
+        submitted = st.form_submit_button("⚡ XÁC NHẬN & TỰ ĐỘNG SINH REGEX (Bấm sau khi chọn xong)", type="primary")
+
+    if submitted:
+        selected_rows = edited_df[edited_df["Chọn_Xóa"] == True]
+        st.session_state["selected_phrases"] = selected_rows["Nội_dung_dòng"].tolist()
+        st.toast(f"Đã chọn thành công {len(st.session_state['selected_phrases'])} dòng rác!", icon="🎉")
+
+    # Display results
+    selected_phrases = st.session_state["selected_phrases"]
 
     st.markdown("---")
-    st.subheader(f"2. Kết Quả Tự Động Tổng Hợp ({len(selected_phrases)} dòng đã chọn)")
+    st.subheader(f"2. Kết Quả Tổng Hợp ({len(selected_phrases)} dòng đã chọn)")
 
     if selected_phrases:
         col_list, col_regex = st.columns([1, 1])
 
         with col_list:
-            st.markdown("##### 📄 Danh sách các cụm từ đã chọn (Dùng để Copy gửi tôi):")
+            st.markdown("##### 📄 Danh sách các câu đã chọn (1-Click Copy gửi tôi):")
             formatted_list = "\n".join(f"- {p}" for p in selected_phrases)
-            st.text_area("Copy danh sách này:", value=formatted_list, height=220)
+            st.text_area("Copy danh sách này:", value=formatted_list, height=240)
 
         with col_regex:
             st.markdown("##### ⚡ Biểu thức Regex tự động sinh (Hệ thống tự tạo):")
@@ -189,7 +204,7 @@ with tab1:
                 save_patterns(updated)
                 st.success(f" Đã lưu thành công {len(updated)} pattern vào configs/boilerplate_patterns.yaml!")
     else:
-        st.info("👉 Hãy tích vào ít nhất 1 ô `Chọn_Xóa` ở bảng trên để hệ thống tự động sinh Regex và danh sách cho bạn.")
+        st.info("👉 Hãy tích chọn các dòng ở bảng trên rồi bấm nút **'⚡ XÁC NHẬN & TỰ ĐỘNG SINH REGEX'** để xem kết quả.")
 
 # ----------------- TAB 2: BEFORE / AFTER INSPECTOR -----------------
 with tab2:
