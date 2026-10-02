@@ -200,9 +200,21 @@ def main():
         rebuild_indices=not args.skip_build_index,
     )
 
+    abs_zip = Path(zip_file).resolve()
+    # If running on Colab, copy directly to /content/ for easy 1-click access
+    if Path("/content").exists():
+        try:
+            colab_dest = Path("/content") / abs_zip.name
+            shutil.copy(abs_zip, colab_dest)
+            logger.info(f"Copied submission zip to Colab root: {colab_dest}")
+        except Exception as e:
+            logger.debug(f"Could not copy to /content: {e}")
+
     print("\n" + "=" * 60)
     print(f"🎉 COMPLETED! Ready to submit:")
-    print(f"ZIP File: {zip_file}")
+    print(f"ZIP File: {abs_zip}")
+    if Path("/content").exists():
+        print(f"Colab Shortcut: /content/{abs_zip.name}")
     print("=" * 60 + "\n")
 
 
