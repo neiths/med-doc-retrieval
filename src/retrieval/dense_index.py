@@ -118,16 +118,93 @@ class DenseIndex:
 
     @classmethod
     def load(cls, directory: Path | str) -> "DenseIndex":
-        """Loads FAISS index and metadata from disk (supports both SQLite and JSON)."""
+        """Loads FAISS index and metadata from disk using zero-RAM memory mapping and SQLite."""
         import sqlite3
 
         load_dir = Path(directory)
         faiss_file = load_dir / "dense_index.faiss"
         sqlite_file = load_dir / "chunks_meta.sqlite"
         meta_file = load_dir / "dense_metadata.json"
+        chunks_jsonl = Path("data/processed/chunks.jsonl")
 
         idx = cls(dimension=1024)
-        idx.index = faiss.read_index(str(faiss_file))
+        try:
+            idx.index = faiss.read_index(str(faiss_file), faiss.IO_FLAG_MMAP)
+            logger.info("Loaded FAISS index via zero-copy memory mapping (IO_FLAG_MMAP).")
+        except Exception:
+            idx.index = faiss.read_index(str(faiss_file))
+
+        # Auto-create lightweight SQLite metadata if not already present
+        if not sqlite_file.exists():
+            if chunks_jsonl.exists():
+                logger.info(f"Building fast SQLite metadata index from {chunks_jsonl} (RAM-safe)...")
+                conn = sqlite3.connect(sqlite_file)
+                cur = conn.cursor()
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
+                )
+                batch = []
+                with open(chunks_jsonl, "r", encoding="utf-8") as f:
+                    for i, line in enumerate(f):
+                        if not line.strip():
+                            continue
+                        c = json.loads(line)
+                        batch.append(
+                            (
+                                i,
+                                str(c.get("doc_id", "")),
+                                str(c.get("chunk_id", "")),
+                                c.get("contextual_text") or c.get("chunk_text", ""),
+                                c.get("title", ""),
+                                c.get("lang", "en"),
+                            )
+                        )
+                        if len(batch) >= 10000:
+                            cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                            conn.commit()
+                            batch.clear()
+                if batch:
+                    cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                    conn.commit()
+                conn.close()
+                logger.info(f"Created SQLite metadata index at {sqlite_file}")
+            elif meta_file.exists():
+                logger.info(f"Converting {meta_file} into SQLite to prevent RAM exhaustion...")
+                try:
+                    import ijson
+                except ImportError:
+                    import subprocess, sys
+
+                    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ijson"], check=False)
+                    import ijson
+
+                conn = sqlite3.connect(sqlite_file)
+                cur = conn.cursor()
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
+                )
+                batch = []
+                with open(meta_file, "rb") as f:
+                    for i, c in enumerate(ijson.items(f, "chunk_metadata.item")):
+                        batch.append(
+                            (
+                                i,
+                                str(c.get("doc_id", "")),
+                                str(c.get("chunk_id", "")),
+                                c.get("contextual_text") or c.get("chunk_text", ""),
+                                c.get("title", ""),
+                                c.get("lang", "en"),
+                            )
+                        )
+                        if len(batch) >= 10000:
+                            cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                            conn.commit()
+                            batch.clear()
+                if batch:
+                    cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                    conn.commit()
+                conn.close()
+                logger.info(f"Created SQLite metadata index from JSON at {sqlite_file}")
 
         if sqlite_file.exists():
             idx._sqlite_conn = sqlite3.connect(sqlite_file)
