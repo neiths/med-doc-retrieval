@@ -129,35 +129,8 @@ def run_pipeline(
     else:
         logger.info(f"Using existing indices in {config.paths.indices_dir}...")
         pipeline.load_indices(config.paths.indices_dir)
-        # If dense exists but BM25 is missing, quickly construct BM25 from chunks.jsonl
         if pipeline.sparse_index is None:
-            chunks_file = Path(config.paths.processed_data_dir) / "chunks.jsonl"
-            if chunks_file.exists():
-                logger.info(f"Dense index loaded but SparseIndex missing. Building BM25 index from {chunks_file}...")
-                import json
-                from src.retrieval.sparse_index import SparseIndex
-                from src.retrieval.hybrid import HybridRetriever
-                chunks = []
-                with open(chunks_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        if line.strip():
-                            chunks.append(json.loads(line))
-                sparse_idx = SparseIndex()
-                sparse_idx.build(chunks)
-                sparse_idx.save(config.paths.indices_dir)
-                pipeline.sparse_index = sparse_idx
-                if pipeline.dense_index is not None:
-                    pipeline.hybrid_retriever = HybridRetriever(
-                        dense_index=pipeline.dense_index,
-                        sparse_index=pipeline.sparse_index,
-                        fusion_method=config.retrieval.fusion_method,
-                        rrf_k=config.retrieval.rrf_k,
-                        dense_weight=config.retrieval.dense_weight,
-                        sparse_weight=config.retrieval.sparse_weight,
-                    )
-                logger.info("Successfully built and initialized Sparse BM25 index!")
-            else:
-                logger.warning("Could not find chunks.jsonl to rebuild SparseIndex. Operating in dense-only mode.")
+            logger.info("Dense index loaded. Operating in high-precision dense-only mode (BGE-M3 + Reranker).")
 
 
     logger.info(f"Running inference on queries: {queries_file} ...")
@@ -210,6 +183,11 @@ def main():
         "--skip-build-index",
         action="store_true",
         help="Skip index building if already built.",
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Force rebuild indices even if dense_index.faiss already exists.",
     )
     parser.add_argument(
         "--hf-token",
@@ -285,7 +263,15 @@ def main():
 
 
     indices_dir = Path("data/indices")
-    rebuild = not args.skip_build_index
+    dense_path = indices_dir / "dense_index.faiss"
+
+    if dense_path.exists() and not args.force_rebuild:
+        logger.info(
+            f"Found existing FAISS dense index at {dense_path} ({dense_path.stat().st_size / (1024**3):.2f} GB). Reusing it without rebuilding!"
+        )
+        rebuild = False
+    else:
+        rebuild = not args.skip_build_index
 
     if args.sync_index_from_bucket:
         logger.info(f"Attempting to download pre-built index from {args.index_bucket_uri} -> {indices_dir} ...")
