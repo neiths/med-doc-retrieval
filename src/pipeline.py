@@ -188,12 +188,24 @@ class MedicalRetrievalPipeline:
                 f"Qdrant collection '{self.config.retrieval.collection_name}' ready with {self.qdrant_index.count():,} chunks."
             )
         else:
-            logger.info("Computing BGE-M3 dense and native lexical sparse embeddings...")
-            chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in all_chunks]
-            embeddings, sparse_weights = self.embedder.encode_both(chunk_texts, show_progress_bar=True)
-            chunk_ids = [c["chunk_id"] for c in all_chunks]
-            dense_idx = DenseIndex(dimension=embeddings.shape[1])
-            dense_idx.add(embeddings=embeddings, chunk_ids=chunk_ids, chunk_metadata=all_chunks)
+            logger.info("Computing BGE-M3 dense embeddings (streamed in batches to prevent RAM overflow)...")
+            dense_idx = DenseIndex(dimension=1024)
+            total_chunks = len(all_chunks)
+            indexing_batch_size = 5000  # 5,000 chunks per batch keeps RAM constant under 2GB
+
+            for start_idx in range(0, total_chunks, indexing_batch_size):
+                end_idx = min(start_idx + indexing_batch_size, total_chunks)
+                batch_chunks = all_chunks[start_idx:end_idx]
+                chunk_texts = [c.get("contextual_text") or c["chunk_text"] for c in batch_chunks]
+                chunk_ids = [c["chunk_id"] for c in batch_chunks]
+
+                # Encode dense only at maximum GPU tensor speed (no sparse dictionary overhead)
+                batch_embeddings = self.embedder.encode(chunk_texts)
+                dense_idx.add(embeddings=batch_embeddings, chunk_ids=chunk_ids, chunk_metadata=batch_chunks)
+                logger.info(
+                    f"Indexed {end_idx:,}/{total_chunks:,} chunks into FAISS (Progress: {end_idx/total_chunks*100:.1f}%)."
+                )
+
             dense_idx.save(output_indices_dir)
 
             sparse_idx = SparseIndex()

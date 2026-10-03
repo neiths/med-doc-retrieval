@@ -46,17 +46,23 @@ class BGEM3Embedder:
                 from FlagEmbedding import BGEM3FlagModel
 
                 logger.info(f"Loading native FlagEmbedding BGEM3FlagModel from {self.model_name}...")
-                target_device = (
-                    "cuda:0"
-                    if (self.device == "cuda" or (self.device == "auto" and torch.cuda.is_available()))
-                    else "cpu"
-                )
-                use_fp16 = self.use_fp16 and (target_device != "cpu")
+                if self.device == "cpu" or not torch.cuda.is_available():
+                    target_devices = ["cpu"]
+                    use_fp16 = False
+                elif self.device in ["cuda", "auto"]:
+                    gpu_count = torch.cuda.device_count()
+                    target_devices = [f"cuda:{i}" for i in range(gpu_count)] if gpu_count > 0 else ["cuda:0"]
+                    use_fp16 = self.use_fp16
+                else:
+                    target_devices = [self.device]
+                    use_fp16 = self.use_fp16
+
+                logger.info(f"Using target device(s): {target_devices} (FP16: {use_fp16})")
 
                 self._model = BGEM3FlagModel(
                     self.model_name,
                     use_fp16=use_fp16,
-                    devices=target_device,
+                    devices=target_devices,
                     batch_size=self.batch_size,
                     query_max_length=self.max_length,
                     passage_max_length=self.max_length,
@@ -91,8 +97,31 @@ class BGEM3Embedder:
         show_progress_bar: bool = False,
     ) -> np.ndarray:
         """Encodes texts into normalized dense embedding matrix of shape (N, dim)."""
-        dense_vecs, _ = self.encode_both(texts, show_progress_bar=show_progress_bar)
-        return dense_vecs
+        if isinstance(texts, str):
+            texts = [texts]
+
+        if not texts:
+            return np.empty((0, 1024), dtype=np.float32)
+
+        _ = self.model
+        if self._is_flag_model:
+            out = self._model.encode(
+                texts,
+                batch_size=self.batch_size,
+                max_length=self.max_length,
+                return_dense=True,
+                return_sparse=False,
+                return_colbert_vecs=False,
+            )
+            return out["dense_vecs"].astype(np.float32)
+        else:
+            return self._model.encode(
+                texts,
+                batch_size=self.batch_size,
+                show_progress_bar=show_progress_bar,
+                normalize_embeddings=self.normalize_embeddings,
+                convert_to_numpy=True,
+            ).astype(np.float32)
 
     def encode_sparse(
         self,
