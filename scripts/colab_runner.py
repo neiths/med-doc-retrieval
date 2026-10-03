@@ -36,6 +36,19 @@ def setup_colab_environment():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
+    # Ensure sparse BM25 tokenization dependencies are installed
+    missing_deps = []
+    for pkg in ["rank_bm25", "pyvi", "jieba"]:
+        try:
+            __import__(pkg)
+        except ImportError:
+            missing_deps.append(pkg.replace("_", "-"))
+
+    if missing_deps:
+        logger.info(f"Installing missing sparse retrieval dependencies: {missing_deps} ...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", *missing_deps], check=True)
+
+
 
 def sync_corpus_from_hf_bucket(
     bucket_uri: str = "hf://buckets/nieths/ViBioMIR/corpus",
@@ -66,6 +79,15 @@ def sync_corpus_from_hf_bucket(
     logger.info(f"Found {len(parquet_files)} Parquet shards in {local_dir}")
     for pf in parquet_files:
         logger.info(f"  - {pf.name} ({pf.stat().st_size / (1024 * 1024):.2f} MB)")
+
+    # Also download precomputed pubmed_cache.jsonl if not present locally
+    pubmed_cache = Path("data/processed/pubmed_cache.jsonl")
+    if not pubmed_cache.exists():
+        logger.info("Downloading precomputed pubmed_cache.jsonl from HF bucket for 100% offline retrieval...")
+        pubmed_remote = "hf://buckets/nieths/ViBioMIR/processed/pubmed_cache.jsonl"
+        subprocess.run([hf_bin, "cp", pubmed_remote, str(pubmed_cache)], env=env)
+        if pubmed_cache.exists():
+            logger.info(f"Loaded pubmed_cache.jsonl: {pubmed_cache.stat().st_size / (1024*1024):.2f} MB")
 
     return parquet_files
 
@@ -98,14 +120,45 @@ def run_pipeline(
 
     pipeline = MedicalRetrievalPipeline(config=config)
 
-    indices_exist = (config.paths.indices_dir / "dense_index.faiss").exists()
+    dense_exists = (config.paths.indices_dir / "dense_index.faiss").exists()
+    sparse_exists = (config.paths.indices_dir / "bm25_index.pkl").exists()
 
-    if rebuild_indices or not indices_exist:
+    if rebuild_indices or not dense_exists:
         logger.info(f"Building FAISS & BM25 indices from {corpus_dir}...")
         pipeline.build_indices(articles_file=corpus_dir, output_indices_dir=config.paths.indices_dir)
     else:
         logger.info(f"Using existing indices in {config.paths.indices_dir}...")
         pipeline.load_indices(config.paths.indices_dir)
+        # If dense exists but BM25 is missing, quickly construct BM25 from chunks.jsonl
+        if pipeline.sparse_index is None:
+            chunks_file = Path(config.paths.processed_data_dir) / "chunks.jsonl"
+            if chunks_file.exists():
+                logger.info(f"Dense index loaded but SparseIndex missing. Building BM25 index from {chunks_file}...")
+                import json
+                from src.retrieval.sparse_index import SparseIndex
+                from src.retrieval.hybrid import HybridRetriever
+                chunks = []
+                with open(chunks_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            chunks.append(json.loads(line))
+                sparse_idx = SparseIndex()
+                sparse_idx.build(chunks)
+                sparse_idx.save(config.paths.indices_dir)
+                pipeline.sparse_index = sparse_idx
+                if pipeline.dense_index is not None:
+                    pipeline.hybrid_retriever = HybridRetriever(
+                        dense_index=pipeline.dense_index,
+                        sparse_index=pipeline.sparse_index,
+                        fusion_method=config.retrieval.fusion_method,
+                        rrf_k=config.retrieval.rrf_k,
+                        dense_weight=config.retrieval.dense_weight,
+                        sparse_weight=config.retrieval.sparse_weight,
+                    )
+                logger.info("Successfully built and initialized Sparse BM25 index!")
+            else:
+                logger.warning("Could not find chunks.jsonl to rebuild SparseIndex. Operating in dense-only mode.")
+
 
     logger.info(f"Running inference on queries: {queries_file} ...")
     zip_path = pipeline.generate_submission(
@@ -238,8 +291,13 @@ def main():
         if args.hf_token:
             env["HF_TOKEN"] = args.hf_token
         res = subprocess.run([hf_bin, "sync", args.index_bucket_uri, str(indices_dir)], env=env)
-        if (indices_dir / "dense_index.faiss").exists():
-            logger.info("Found pre-built FAISS index from HF bucket! Skipping rebuild.")
+        dense_found = (indices_dir / "dense_index.faiss").exists()
+        sparse_found = (indices_dir / "bm25_index.pkl").exists()
+        if dense_found and sparse_found:
+            logger.info("Found pre-built FAISS + BM25 index from HF bucket! Skipping rebuild.")
+            rebuild = False
+        elif dense_found:
+            logger.info("Found pre-built FAISS dense index from HF bucket. Will reuse dense and verify BM25.")
             rebuild = False
 
     zip_file = run_pipeline(
@@ -261,20 +319,23 @@ def main():
 
 
     abs_zip = Path(zip_file).resolve()
-    # If running on Colab, copy directly to /content/ for easy 1-click access
-    if Path("/content").exists():
-        try:
-            colab_dest = Path("/content") / abs_zip.name
-            shutil.copy(abs_zip, colab_dest)
-            logger.info(f"Copied submission zip to Colab root: {colab_dest}")
-        except Exception as e:
-            logger.debug(f"Could not copy to /content: {e}")
+    # If running on Colab or Kaggle, copy directly to working root for easy 1-click download
+    for root_dir in [Path("/content"), Path("/kaggle/working")]:
+        if root_dir.exists():
+            try:
+                dest = root_dir / abs_zip.name
+                shutil.copy(abs_zip, dest)
+                logger.info(f"Copied submission zip to {root_dir}: {dest}")
+            except Exception as e:
+                logger.debug(f"Could not copy to {root_dir}: {e}")
 
     print("\n" + "=" * 60)
     print(f"🎉 COMPLETED! Ready to submit:")
     print(f"ZIP File: {abs_zip}")
     if Path("/content").exists():
         print(f"Colab Shortcut: /content/{abs_zip.name}")
+    if Path("/kaggle/working").exists():
+        print(f"Kaggle Shortcut: /kaggle/working/{abs_zip.name}")
     print("=" * 60 + "\n")
 
 

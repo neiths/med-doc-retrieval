@@ -83,6 +83,23 @@ class MedicalRetrievalPipeline:
                 dimension=1024,
             )
 
+        self._enriched_queries: dict[str, dict[str, Any]] = {}
+        enriched_file = Path(self.config.paths.processed_data_dir) / "queries_enriched.jsonl"
+        if enriched_file.exists():
+            try:
+                with open(enriched_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            item = json.loads(line)
+                            qtext = item.get("original_query", "").strip()
+                            if qtext:
+                                self._enriched_queries[qtext] = item
+                logger.info(
+                    f"Loaded {len(self._enriched_queries):,} precomputed enriched queries from {enriched_file} (offline accelerated)."
+                )
+            except Exception as e:
+                logger.warning(f"Could not load precomputed queries: {e}")
+
     def build_indices(
         self,
         articles_file: str | Path = "data/processed/all_articles.jsonl",
@@ -183,7 +200,20 @@ class MedicalRetrievalPipeline:
             sparse_idx.build(all_chunks)
             sparse_idx.save(output_indices_dir)
 
-        logger.info("Indices successfully built and persisted.")
+            # Keep in-memory instances ready for inference immediately
+            self.dense_index = dense_idx
+            self.sparse_index = sparse_idx
+            if self.dense_index is not None and self.sparse_index is not None:
+                self.hybrid_retriever = HybridRetriever(
+                    dense_index=self.dense_index,
+                    sparse_index=self.sparse_index,
+                    fusion_method=self.config.retrieval.fusion_method,
+                    rrf_k=self.config.retrieval.rrf_k,
+                    dense_weight=self.config.retrieval.dense_weight,
+                    sparse_weight=self.config.retrieval.sparse_weight,
+                )
+
+        logger.info("Indices successfully built, persisted, and initialized in memory.")
 
     def load_indices(self, indices_dir: str | Path = "data/indices"):
         """Loads FAISS and BM25 indices from disk (fallback when engine == 'faiss')."""
@@ -194,18 +224,25 @@ class MedicalRetrievalPipeline:
             logger.warning(f"Could not load DenseIndex: {e}")
 
         try:
+            bm25_file = idx_dir / "bm25_index.pkl"
+            if not bm25_file.exists():
+                raise FileNotFoundError(f"BM25 index file not found at {bm25_file}")
             self.sparse_index = SparseIndex.load(idx_dir)
-            self.hybrid_retriever = HybridRetriever(
-                dense_index=self.dense_index,
-                sparse_index=self.sparse_index,
-                fusion_method=self.config.retrieval.fusion_method,
-                rrf_k=self.config.retrieval.rrf_k,
-                dense_weight=self.config.retrieval.dense_weight,
-                sparse_weight=self.config.retrieval.sparse_weight,
-            )
-        except Exception:
-            logger.debug("SparseIndex not loaded. Operating in dense-only mode.")
-        logger.info("Indices successfully loaded into memory.")
+            if self.dense_index is not None and self.sparse_index is not None:
+                self.hybrid_retriever = HybridRetriever(
+                    dense_index=self.dense_index,
+                    sparse_index=self.sparse_index,
+                    fusion_method=self.config.retrieval.fusion_method,
+                    rrf_k=self.config.retrieval.rrf_k,
+                    dense_weight=self.config.retrieval.dense_weight,
+                    sparse_weight=self.config.retrieval.sparse_weight,
+                )
+                logger.info("HybridRetriever (Dense + Sparse) successfully initialized.")
+        except FileNotFoundError as e:
+            logger.warning(f"SparseIndex not found: {e}. Operating in dense-only mode.")
+        except Exception as e:
+            logger.warning(f"Failed to load SparseIndex ({type(e).__name__}: {e}). Operating in dense-only mode.")
+        logger.info("Indices loading process completed.")
 
     def search_query(self, query: str) -> dict[str, Any]:
         """Performs end-to-end retrieval for a single query across VI, ZH, and EN."""
@@ -217,19 +254,25 @@ class MedicalRetrievalPipeline:
                     f"Could not load pre-built local indices ({e}). Proceeding with PubMed only if enabled."
                 )
 
+        # Check if precomputed enrichment exists
+        enriched = self._enriched_queries.get(query.strip())
+
         # 1. Embed query (dense + native lexical sparse)
-        query_text_for_search = query
-        if self.translator:
-            parts = [query]
-            acr_exp = self.translator.expand_acronyms(query)
-            if acr_exp.get("vi"):
-                parts.append(acr_exp["vi"])
-            zh_kw = self.translator.extract_chinese_keywords(query)
-            if zh_kw:
-                parts.append(zh_kw)
-            if len(parts) > 1:
-                query_text_for_search = " ".join(parts)
-                logger.debug(f"Enriched query for search: '{query_text_for_search}'")
+        if enriched and "search_query_text" in enriched:
+            query_text_for_search = enriched["search_query_text"]
+        else:
+            query_text_for_search = query
+            if self.translator:
+                parts = [query]
+                acr_exp = self.translator.expand_acronyms(query)
+                if acr_exp.get("vi"):
+                    parts.append(acr_exp["vi"])
+                zh_kw = self.translator.extract_chinese_keywords(query)
+                if zh_kw:
+                    parts.append(zh_kw)
+                if len(parts) > 1:
+                    query_text_for_search = " ".join(parts)
+                    logger.debug(f"Enriched query for search: '{query_text_for_search}'")
 
         q_dense, q_sparse = self.embedder.encode_both([query_text_for_search])
         q_emb = q_dense[0]
@@ -273,17 +316,28 @@ class MedicalRetrievalPipeline:
         # 3. Dynamic English Retrieval via PubMed (EN)
         pubmed_candidates: list[dict[str, Any]] = []
         if self.pubmed_client and self.config.pubmed.enabled:
-            if self.translator and self.config.query_translation.enabled:
-                en_query = self.translator.extract_pubmed_keywords(query)
-            else:
-                en_query = query
+            articles = []
+            if enriched and "pubmed_candidate_ids" in enriched:
+                # Fast offline retrieval from memory cache
+                for pmid in enriched["pubmed_candidate_ids"]:
+                    cached_art = self.pubmed_client._memory_cache.get(str(pmid))
+                    if cached_art:
+                        articles.append(cached_art)
 
-            logger.info(f"Querying PubMed with extracted keywords: '{en_query}'")
-            articles = self.pubmed_client.search_candidate_articles(
-                query=en_query,
-                top_k=self.config.pubmed.max_candidates_per_query,
-                source=self.config.pubmed.source_api,
-            )
+            if not articles:
+                if enriched and enriched.get("en_keywords"):
+                    en_query = enriched["en_keywords"]
+                elif self.translator and self.config.query_translation.enabled:
+                    en_query = self.translator.extract_pubmed_keywords(query)
+                else:
+                    en_query = query
+
+                logger.info(f"Querying PubMed with extracted keywords: '{en_query}'")
+                articles = self.pubmed_client.search_candidate_articles(
+                    query=en_query,
+                    top_k=self.config.pubmed.max_candidates_per_query,
+                    source=self.config.pubmed.source_api,
+                )
 
             for art in articles:
                 chunks = self.chunker.chunk_document(

@@ -214,6 +214,28 @@ class QueryTranslator:
             )
             return ""
 
+    def translate_batch(self, vi_texts: list[str], batch_size: int = 32) -> list[str]:
+        """Translates a batch of Vietnamese queries to English using GPU batching."""
+        if not vi_texts:
+            return []
+
+        self._load_model()
+        results = []
+        for i in range(0, len(vi_texts), batch_size):
+            batch = vi_texts[i : i + batch_size]
+            formatted = [
+                f"{self.prompt_prefix}{t}" if self.prompt_prefix else t for t in batch
+            ]
+            inputs = self._tokenizer(
+                formatted, return_tensors="pt", padding=True, truncation=True, max_length=128
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                generated = self._model.generate(**inputs, max_length=128)
+            decoded = self._tokenizer.batch_decode(generated, skip_special_tokens=True)
+            results.extend([d.strip() for d in decoded])
+        return results
+
     def expand_acronyms(self, query: str) -> dict[str, str]:
         """Expands clinical acronyms (e.g. HFrEF, STEMI, COPD, CURB-65, rt-PA) into VI, EN, and ZH medical terms."""
         if not query or not self.acronyms:
@@ -243,7 +265,7 @@ class QueryTranslator:
             "zh": " ".join(found_zh),
         }
 
-    def extract_pubmed_keywords(self, vi_query: str) -> str:
+    def extract_pubmed_keywords(self, vi_query: str, translated: str | None = None) -> str:
         """Extracts concise English keywords suitable for PubMed ESearch / Europe PMC API.
 
         Combines:
@@ -265,7 +287,8 @@ class QueryTranslator:
             if vi_phrase in vi_lower:
                 lexicon_terms.append(self.lexicon[vi_phrase])
 
-        translated = self.translate_to_english(vi_query)
+        if translated is None:
+            translated = self.translate_to_english(vi_query)
         keywords = []
 
         if translated:
