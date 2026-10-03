@@ -258,8 +258,12 @@ def main():
 
     queries_path = args.queries
     if not queries_path.exists():
+        enriched_jsonl = Path("data/processed/queries_enriched.jsonl")
         query_parquet = Path("data/raw/vibio_mir/query.parquet")
-        if query_parquet.exists():
+        if enriched_jsonl.exists():
+            queries_path = enriched_jsonl
+            logger.info(f"Using precomputed enriched queries from {queries_path}")
+        elif query_parquet.exists():
             queries_path = query_parquet
         else:
             logger.info("Queries file not found locally. Auto-downloading query.parquet from Hugging Face (AIGuruTinix/ViBioMIR)...")

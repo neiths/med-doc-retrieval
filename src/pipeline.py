@@ -413,7 +413,7 @@ class MedicalRetrievalPipeline:
         logger.info(f"Predicting {len(queries)} queries...")
         for q in tqdm(queries, desc="Evaluating queries"):
             qid = int(q["id"])
-            query_text = q["query"]
+            query_text = q.get("query") or q.get("original_query") or ""
             result = self.search_query(query_text)
             predictions.append(
                 {
