@@ -223,6 +223,7 @@ data/raw/*
 !data/raw/queries.jsonl
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/queries_enriched.jsonl
 data/indices/*
 !data/indices/.gitkeep
 data/mock/indices/*

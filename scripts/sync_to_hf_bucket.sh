@@ -20,8 +20,13 @@ if ! command -v hf &> /dev/null; then
 fi
 
 # Check for HF token
+if [ -z "${HF_TOKEN}" ] && [ -f ".env" ]; then
+    HF_TOKEN=$(grep -E '^HF_TOKEN=' .env | cut -d '=' -f2- | tr -d ' "\r')
+    export HF_TOKEN
+fi
+
 if [ -z "${HF_TOKEN}" ]; then
-    echo "Notice: HF_TOKEN is not set in environment."
+    echo "Notice: HF_TOKEN is not set in environment or .env."
     echo "If sync fails with authentication error, run 'hf auth login' or export HF_TOKEN=hf_..."
 fi
 
