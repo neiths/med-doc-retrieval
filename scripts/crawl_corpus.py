@@ -77,6 +77,23 @@ def load_candidate_urls(
     max_urls: int | None = None,
 ) -> list[dict[str, Any]]:
     """Loads URLs from Parquet or JSONL, applies sharding, filtering, and domain interleaving."""
+    if not input_file.exists():
+        logger.info(f"Input file {input_file} not found locally. Auto-downloading from Hugging Face (AIGuruTinix/ViBioMIR)...")
+        try:
+            from huggingface_hub import hf_hub_download
+            input_file.parent.mkdir(parents=True, exist_ok=True)
+            downloaded = hf_hub_download(
+                repo_id="AIGuruTinix/ViBioMIR",
+                filename=input_file.name,
+                repo_type="dataset",
+                local_dir=str(input_file.parent),
+            )
+            input_file = Path(downloaded)
+            logger.info(f"Downloaded candidate file to: {input_file}")
+        except Exception as e:
+            logger.error(f"Could not auto-download {input_file}: {e}")
+            raise FileNotFoundError(f"Missing input candidate file: {input_file}")
+
     logger.info(f"Loading corpus from {input_file} (Shard {shard_id}/{num_shards})...")
 
     import itertools
@@ -153,19 +170,47 @@ def get_already_scraped_ids(
     output_file: Path,
     resume_from: list[Path] | Path | None = None,
 ) -> set[str]:
-    """Reads existing doc_ids from output JSONL and optional resume_from files for instant resumability."""
+    """Reads existing doc_ids from output JSONL and optional resume_from files (JSONL or Parquet)."""
     existing_ids = set()
-    files_to_check: list[Path] = []
+    raw_paths: list[Path] = []
     if resume_from:
         if isinstance(resume_from, (str, Path)):
-            files_to_check.append(Path(resume_from))
+            raw_paths.append(Path(resume_from))
         else:
-            files_to_check.extend([Path(p) for p in resume_from])
+            raw_paths.extend([Path(p) for p in resume_from])
     if output_file.exists():
-        files_to_check.append(output_file)
+        raw_paths.append(output_file)
+
+    files_to_check: list[Path] = []
+    for rp in raw_paths:
+        if not rp.exists():
+            continue
+        if rp.is_dir():
+            pq_list = sorted(rp.glob("*.parquet"))
+            jl_list = sorted(rp.glob("*.jsonl"))
+            files_to_check.extend(pq_list)
+            files_to_check.extend(jl_list)
+        else:
+            files_to_check.append(rp)
 
     for fpath in files_to_check:
-        if fpath.exists():
+        if not fpath.exists():
+            continue
+        if fpath.suffix == ".parquet":
+            try:
+                table = pq.read_table(fpath, columns=["doc_id"])
+                ids = [str(i) for i in table["doc_id"].to_pylist() if i is not None]
+                existing_ids.update(ids)
+                logger.info(f"Loaded {len(ids):,} existing doc_ids from Parquet {fpath.name}")
+            except Exception:
+                try:
+                    table = pq.read_table(fpath, columns=["id"])
+                    ids = [str(i) for i in table["id"].to_pylist() if i is not None]
+                    existing_ids.update(ids)
+                    logger.info(f"Loaded {len(ids):,} existing doc_ids from Parquet {fpath.name}")
+                except Exception as e:
+                    logger.warning(f"Could not load IDs from {fpath}: {e}")
+        else:
             count = 0
             with open(fpath, encoding="utf-8") as f:
                 for line in f:
@@ -178,7 +223,7 @@ def get_already_scraped_ids(
                                 count += 1
                         except Exception:
                             pass
-            logger.info(f"Loaded {count:,} existing doc_ids from checkpoint {fpath}")
+            logger.info(f"Loaded {count:,} existing doc_ids from checkpoint {fpath.name}")
     return existing_ids
 
 
@@ -192,6 +237,7 @@ async def run_crawler_pipeline(
     min_delay: float = 0.2,
     max_delay: float = 0.6,
     flush_interval: int = 50,
+    limit: int | None = None,
 ):
     """Executes asynchronous crawling using a fixed-size worker pool, polite delay, and buffered writing."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +256,8 @@ async def run_crawler_pipeline(
     existing_ids = get_already_scraped_ids(output_file, resume_from=resume_from)
 
     items_to_crawl = [it for it in items if str(it.get("id")) not in existing_ids]
+    if limit is not None and limit > 0:
+        items_to_crawl = items_to_crawl[:limit]
 
     if existing_ids:
         logger.info(
@@ -393,7 +441,7 @@ def main():
         shard_id=args.shard_id,
         num_shards=args.num_shards,
         priority_only=args.priority_only,
-        max_urls=args.limit,
+        max_urls=None if args.resume_from else args.limit,
     )
 
     # Run crawler
@@ -405,6 +453,7 @@ def main():
             concurrency=args.concurrency,
             min_delay=args.min_delay,
             max_delay=args.max_delay,
+            limit=args.limit,
         )
     )
 
