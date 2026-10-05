@@ -43,6 +43,29 @@ class ChunksTokenStream:
                     yield RE_WORDS.findall(t_lower)
 
 
+class SqliteTokenStream:
+    """Zero-RAM streaming iterator over chunks_meta.sqlite for bm25s multiple indexing passes."""
+
+    def __init__(self, db_path: Path | str):
+        self.db_path = str(db_path)
+
+    def __iter__(self):
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        for row in cur.execute("SELECT chunk_text, title, lang FROM chunks ORDER BY idx"):
+            raw_c = row[0] or ""
+            title = row[1] or ""
+            lang = row[2] or "vi"
+            text = f"Tiêu đề: {title}\nNội dung: {raw_c}" if title else raw_c
+            t_lower = text.lower()
+            if lang == "zh" or any("\u4e00" <= c <= "\u9fff" for c in text[:50]):
+                chars = [c for c in t_lower if not c.isspace()]
+                yield chars + [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
+            else:
+                yield RE_WORDS.findall(t_lower)
+        conn.close()
+
+
 def main():
     chunks_file = Path("data/processed/chunks.jsonl")
     indices_dir = Path("data/indices")
@@ -50,29 +73,37 @@ def main():
     sqlite_file = indices_dir / "chunks_meta.sqlite"
     bm25s_dir = indices_dir / "bm25s_index"
 
-    if not chunks_file.exists():
-        raise FileNotFoundError(f"Chunks file {chunks_file} not found!")
+    if not chunks_file.exists() and not sqlite_file.exists():
+        raise FileNotFoundError(f"Neither {chunks_file} nor {sqlite_file} found!")
 
-    logger.info(f"=== Step 1: Building SQLite Metadata Index ({sqlite_file}) ===")
+    logger.info(f"=== Step 1: Checking/Building SQLite Metadata Index ({sqlite_file}) ===")
     t0 = time.time()
-    conn = sqlite3.connect(sqlite_file)
-    cur = conn.cursor()
-    cur.execute("DROP TABLE IF EXISTS chunks")
-    cur.execute(
-        "CREATE TABLE chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
-    )
-
     batch_meta = []
     chunk_ids = []
 
+    sqlite_ready = False
     if sqlite_file.exists() and sqlite_file.stat().st_size > 1_000_000_000:
-        logger.info(f"Step 1 SKIPPED: Found existing SQLite index ({sqlite_file.stat().st_size / (1024**3):.2f} GB).")
+        try:
+            conn = sqlite3.connect(sqlite_file)
+            cur = conn.cursor()
+            count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            if count >= 1_600_000:
+                logger.info(f"Step 1 SKIPPED: Found existing complete SQLite index with {count:,} chunks.")
+                chunk_ids = [r[0] for r in cur.execute("SELECT chunk_id FROM chunks ORDER BY idx").fetchall()]
+                conn.close()
+                sqlite_ready = True
+            else:
+                conn.close()
+        except Exception:
+            pass
+
+    if not sqlite_ready:
         conn = sqlite3.connect(sqlite_file)
         cur = conn.cursor()
-        chunk_ids = [r[0] for r in cur.execute("SELECT chunk_id FROM chunks ORDER BY idx").fetchall()]
-        conn.close()
-        logger.info(f"Loaded {len(chunk_ids):,} chunk IDs from SQLite.")
-    else:
+        cur.execute("DROP TABLE IF EXISTS chunks")
+        cur.execute(
+            "CREATE TABLE chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
+        )
         logger.info(f"Streaming {chunks_file} into SQLite...")
         with open(chunks_file, "r", encoding="utf-8") as f:
             for idx, line in enumerate(f):
@@ -109,7 +140,7 @@ def main():
 
     logger.info("=== Step 2: Zero-RAM Streaming BM25s Indexing ===")
     t_bm25 = time.time()
-    stream = ChunksTokenStream(chunks_file)
+    stream = ChunksTokenStream(chunks_file) if chunks_file.exists() else SqliteTokenStream(sqlite_file)
     retriever = bm25s.BM25(k1=1.5, b=0.75)
     retriever.index(stream, show_progress=True)
     logger.info(f"BM25s matrix built in {time.time() - t_bm25:.1f}s. Saving to {bm25s_dir}...")
