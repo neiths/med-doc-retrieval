@@ -1,4 +1,4 @@
-"""Ultra-fast, Zero-OOM BM25s Builder and SQLite Metadata Creator.
+r"""Ultra-fast, Zero-OOM BM25s Builder and SQLite Metadata Creator.
 
 Optimizations:
 1. Single-process streaming: No multiprocessing fork, avoiding 4x memory duplication.
