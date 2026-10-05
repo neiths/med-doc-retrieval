@@ -63,12 +63,6 @@ class SparseIndex:
             corpus_tokens.append(tokens)
             self.chunk_ids.append(chunk["chunk_id"])
 
-            clean_chunk = dict(chunk)
-            raw_c = clean_chunk.get("chunk_text", "")
-            if raw_c.startswith("Tiêu đề:") and "\nNội dung: " in raw_c:
-                clean_chunk["chunk_text"] = raw_c.split("\nNội dung: ", 1)[-1].strip()
-            self.chunk_metadata.append(clean_chunk)
-
         self.retriever = bm25s.BM25(k1=self.k1, b=self.b)
         self.retriever.index(corpus_tokens)
         logger.info("bm25s index construction completed.")
@@ -138,7 +132,6 @@ class SparseIndex:
                     "k1": self.k1,
                     "b": self.b,
                     "chunk_ids": self.chunk_ids,
-                    "chunk_metadata": self.chunk_metadata,
                 },
                 f,
                 ensure_ascii=False,
