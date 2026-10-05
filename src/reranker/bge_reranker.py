@@ -37,13 +37,20 @@ class BGEReranker:
 
             logger.info(f"Loading reranker model weights from {self.model_name}...")
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            dtype = torch.float16 if (self.use_fp16 and self.device == "cuda") else torch.float32
+            dtype = torch.float16 if (self.use_fp16 and torch.cuda.is_available()) else torch.float32
+
+            target_device = self.device
+            if self.device in ["cuda", "auto"] and torch.cuda.device_count() > 1:
+                target_device = "cuda:1"
+                logger.info(f"Multi-GPU detected: Allocating BGE-Reranker to secondary GPU ({target_device}).")
+
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
-                dtype=dtype,
+                torch_dtype=dtype,
             )
-            self._model.to(self.device)
+            self._model.to(target_device)
             self._model.eval()
+            self.device = target_device
 
     def compute_scores(self, pairs: list[tuple[str, str]]) -> list[float]:
         """Computes cross-encoder relevance scores for (query, document/chunk) pairs."""
