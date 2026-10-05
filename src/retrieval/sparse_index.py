@@ -138,12 +138,32 @@ class SparseIndex:
         import sqlite3
 
         load_dir = Path(directory)
-        bm25s_dir = load_dir / "bm25s_index"
+        bm25s_candidates = [
+            load_dir / "bm25s_index",
+            load_dir / "bm25s_index" / "bm25s_index",
+            load_dir.parent / "indices" / "bm25s_index",
+            Path("/kaggle/working/data/indices/bm25s_index"),
+            Path("/kaggle/working/med-doc-retrieval/data/indices/bm25s_index"),
+        ]
+        bm25s_dir = None
+        for cand in bm25s_candidates:
+            if cand.exists() and ((cand / "vocab.index.json").exists() or any(cand.glob("*.npy"))):
+                bm25s_dir = cand
+                break
+
         meta_file = load_dir / "bm25s_metadata.json"
+        if not meta_file.exists() and bm25s_dir:
+            if (bm25s_dir.parent / "bm25s_metadata.json").exists():
+                meta_file = bm25s_dir.parent / "bm25s_metadata.json"
+
         sqlite_file = load_dir / "chunks_meta.sqlite"
+        if not sqlite_file.exists() and bm25s_dir:
+            if (bm25s_dir.parent / "chunks_meta.sqlite").exists():
+                sqlite_file = bm25s_dir.parent / "chunks_meta.sqlite"
+
         pkl_file = load_dir / "bm25_index.pkl"
 
-        if bm25s_dir.exists():
+        if bm25s_dir is not None and bm25s_dir.exists():
             idx = cls()
             idx.retriever = bm25s.BM25.load(str(bm25s_dir), mmap=True)
             if meta_file.exists():

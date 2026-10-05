@@ -236,10 +236,6 @@ class MedicalRetrievalPipeline:
             logger.warning(f"Could not load DenseIndex: {e}")
 
         try:
-            bm25_file = idx_dir / "bm25_index.pkl"
-            bm25s_dir = idx_dir / "bm25s_index"
-            if not bm25_file.exists() and not bm25s_dir.exists():
-                raise FileNotFoundError(f"Sparse index files not found in {idx_dir}")
             self.sparse_index = SparseIndex.load(idx_dir)
             if self.dense_index is not None and self.sparse_index is not None:
                 self.hybrid_retriever = HybridRetriever(
