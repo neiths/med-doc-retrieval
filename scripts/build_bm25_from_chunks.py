@@ -65,39 +65,47 @@ def main():
     batch_meta = []
     chunk_ids = []
 
-    logger.info(f"Streaming {chunks_file} into SQLite...")
-    with open(chunks_file, "r", encoding="utf-8") as f:
-        for idx, line in enumerate(f):
-            if not line.strip():
-                continue
-            item = json.loads(line)
-            cid = str(item.get("chunk_id", f"c_{idx}"))
-            did = str(item.get("doc_id", ""))
-            raw_text = item.get("chunk_text", "")
-            if raw_text.startswith("Tiêu đề:") and "\nNội dung: " in raw_text:
-                clean_text = raw_text.split("\nNội dung: ", 1)[-1].strip()
-            else:
-                clean_text = raw_text
+    if sqlite_file.exists() and sqlite_file.stat().st_size > 1_000_000_000:
+        logger.info(f"Step 1 SKIPPED: Found existing SQLite index ({sqlite_file.stat().st_size / (1024**3):.2f} GB).")
+        conn = sqlite3.connect(sqlite_file)
+        cur = conn.cursor()
+        chunk_ids = [r[0] for r in cur.execute("SELECT chunk_id FROM chunks ORDER BY idx").fetchall()]
+        conn.close()
+        logger.info(f"Loaded {len(chunk_ids):,} chunk IDs from SQLite.")
+    else:
+        logger.info(f"Streaming {chunks_file} into SQLite...")
+        with open(chunks_file, "r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                cid = str(item.get("chunk_id", f"c_{idx}"))
+                did = str(item.get("doc_id", ""))
+                raw_text = item.get("chunk_text", "")
+                if raw_text.startswith("Tiêu đề:") and "\nNội dung: " in raw_text:
+                    clean_text = raw_text.split("\nNội dung: ", 1)[-1].strip()
+                else:
+                    clean_text = raw_text
 
-            title = item.get("title") or (item.get("metadata") or {}).get("title", "")
-            lang = item.get("lang", "vi")
+                title = item.get("title") or (item.get("metadata") or {}).get("title", "")
+                lang = item.get("lang", "vi")
 
-            batch_meta.append((idx, did, cid, clean_text, title, lang))
-            chunk_ids.append(cid)
+                batch_meta.append((idx, did, cid, clean_text, title, lang))
+                chunk_ids.append(cid)
 
-            if len(batch_meta) >= 50000:
-                cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch_meta)
-                conn.commit()
-                batch_meta.clear()
-                logger.info(f"Indexed {idx + 1:,} chunks into SQLite...")
+                if len(batch_meta) >= 50000:
+                    cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch_meta)
+                    conn.commit()
+                    batch_meta.clear()
+                    logger.info(f"Indexed {idx + 1:,} chunks into SQLite...")
 
-    if batch_meta:
-        cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch_meta)
-        conn.commit()
-        batch_meta.clear()
+        if batch_meta:
+            cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch_meta)
+            conn.commit()
+            batch_meta.clear()
 
-    conn.close()
-    logger.info(f"Step 1 Complete: {len(chunk_ids):,} chunks in SQLite ({time.time() - t0:.1f}s).")
+        conn.close()
+        logger.info(f"Step 1 Complete: {len(chunk_ids):,} chunks in SQLite ({time.time() - t0:.1f}s).")
 
     logger.info("=== Step 2: Zero-RAM Streaming BM25s Indexing ===")
     t_bm25 = time.time()
