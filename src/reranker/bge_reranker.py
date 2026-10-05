@@ -40,7 +40,7 @@ class BGEReranker:
             dtype = torch.float16 if (self.use_fp16 and self.device == "cuda") else torch.float32
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
-                torch_dtype=dtype,
+                dtype=dtype,
             )
             self._model.to(self.device)
             self._model.eval()

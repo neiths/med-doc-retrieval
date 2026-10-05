@@ -90,7 +90,7 @@ def preload_model(model_info: dict[str, str], device: str, warmup: bool = True) 
         elif loader_type == "reranker":
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             dtype = torch.float16 if device == "cuda" else torch.float32
-            model = AutoModelForSequenceClassification.from_pretrained(model_name, torch_dtype=dtype)
+            model = AutoModelForSequenceClassification.from_pretrained(model_name, dtype=dtype)
             model.to(device)
             model.eval()
             load_time = time.time() - t0
@@ -112,7 +112,7 @@ def preload_model(model_info: dict[str, str], device: str, warmup: bool = True) 
         elif loader_type == "seq2seq":
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             dtype = torch.float16 if device == "cuda" else torch.float32
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=dtype)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name, dtype=dtype)
             model.to(device)
             model.eval()
             load_time = time.time() - t0

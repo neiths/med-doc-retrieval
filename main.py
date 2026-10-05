@@ -200,5 +200,59 @@ def generate_submission(
     )
 
 
+@app.command()
+def clean_parquet(
+    input_paths: list[str] = typer.Option(
+        ["data/raw"], "--input", "-i", help="JSONL file(s) or directory containing raw crawl data"
+    ),
+    output_dir: Path = typer.Option(
+        Path("data/processed/parquet_corpus"), "--output-dir", "-o", help="Output directory for Parquet shards"
+    ),
+    chunk_size: int = typer.Option(100_000, "--chunk-size", help="Max rows per Parquet file shard"),
+    min_chars: int = typer.Option(50, "--min-chars", help="Minimum article length to keep"),
+    sync: bool = typer.Option(False, "--sync", help="Sync to Hugging Face Bucket"),
+    bucket: str = typer.Option("hf://buckets/nieths/ViBioMIR/corpus", "--bucket", help="HF Bucket URI"),
+):
+    """Normalizes text, strips boilerplate regex, deduplicates IDs, and converts JSONL to Parquet."""
+    from scripts.convert_jsonl_to_parquet import convert_and_validate, sync_to_hf_bucket
+    import glob
+
+    resolved_files: list[Path] = []
+    for item in input_paths:
+        p = Path(item)
+        if p.is_dir():
+            resolved_files.extend(sorted(p.glob("*.jsonl")))
+        elif "*" in str(item):
+            for match in glob.glob(str(item)):
+                resolved_files.append(Path(match))
+        elif p.exists():
+            resolved_files.append(p)
+        else:
+            console.print(f"[yellow]Input path not found: {item}[/yellow]")
+
+    if not resolved_files:
+        console.print("[bold red]No valid JSONL files found. Exiting.[/bold red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold green]Starting conversion of {len(resolved_files)} JSONL files to Parquet...[/bold green]")
+    created = convert_and_validate(
+        input_paths=resolved_files,
+        output_dir=output_dir,
+        chunk_size=chunk_size,
+        min_chars=min_chars,
+    )
+
+    if sync and created:
+        sync_to_hf_bucket(output_dir, bucket)
+
+
+@app.command()
+def ui():
+    """Launches the Streamlit Pattern Cleaner & Live Regex Testing UI."""
+    import subprocess
+    console.print("[bold green]Starting Pattern Cleaner Streamlit UI...[/bold green]")
+    subprocess.run(["streamlit", "run", "scripts/pattern_cleaner_ui.py"])
+
+
 if __name__ == "__main__":
     app()
