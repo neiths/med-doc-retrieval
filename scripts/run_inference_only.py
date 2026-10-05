@@ -18,6 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 from loguru import logger
 from tqdm import tqdm
@@ -30,9 +33,14 @@ from src.submission.formatter import SubmissionPackage
 def setup_inference_env():
     """Configures GPU and PyTorch flags for maximum inference throughput."""
     if torch.cuda.is_available():
+        torch.cuda.empty_cache()
         gpu_name = torch.cuda.get_device_name(0)
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        logger.info(f"Using GPU: {gpu_name} ({vram_gb:.1f} GB VRAM)")
+        allocated_gb = torch.cuda.memory_allocated(0) / (1024**3)
+        reserved_gb = torch.cuda.memory_reserved(0) / (1024**3)
+        logger.info(
+            f"Using GPU: {gpu_name} ({vram_gb:.1f} GB VRAM) | Allocated: {allocated_gb:.2f} GB | Reserved: {reserved_gb:.2f} GB"
+        )
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_grad_enabled(False)
@@ -63,8 +71,8 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=64,
-        help="Batch size for cross-encoder reranker on GPU.",
+        default=16,
+        help="Batch size for cross-encoder reranker on GPU (default 16 to avoid OOM).",
     )
     parser.add_argument(
         "--disable-pubmed-network",

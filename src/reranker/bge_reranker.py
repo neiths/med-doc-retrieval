@@ -67,6 +67,7 @@ class BGEReranker:
                 outputs = self._model(**inputs)
                 batch_scores = outputs.logits.view(-1).float().cpu().tolist()
                 scores.extend(batch_scores)
+                del inputs, outputs
 
         return scores
 
