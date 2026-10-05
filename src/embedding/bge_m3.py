@@ -47,22 +47,21 @@ class BGEM3Embedder:
 
                 logger.info(f"Loading native FlagEmbedding BGEM3FlagModel from {self.model_name}...")
                 if self.device == "cpu" or not torch.cuda.is_available():
-                    target_devices = ["cpu"]
+                    target_device = "cpu"
                     use_fp16 = False
                 elif self.device in ["cuda", "auto"]:
-                    gpu_count = torch.cuda.device_count()
-                    target_devices = [f"cuda:{i}" for i in range(gpu_count)] if gpu_count > 0 else ["cuda:0"]
+                    target_device = "cuda:0"
                     use_fp16 = self.use_fp16
                 else:
-                    target_devices = [self.device]
+                    target_device = self.device
                     use_fp16 = self.use_fp16
 
-                logger.info(f"Using target device(s): {target_devices} (FP16: {use_fp16})")
+                logger.info(f"Using target device: {target_device} (FP16: {use_fp16})")
 
                 self._model = BGEM3FlagModel(
                     self.model_name,
                     use_fp16=use_fp16,
-                    devices=target_devices,
+                    devices=target_device,
                     batch_size=self.batch_size,
                     query_max_length=self.max_length,
                     passage_max_length=self.max_length,

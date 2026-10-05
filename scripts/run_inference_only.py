@@ -20,6 +20,8 @@ if str(REPO_ROOT) not in sys.path:
 
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
 import torch
 from loguru import logger
