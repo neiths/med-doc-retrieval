@@ -79,10 +79,20 @@ class DenseIndex:
                     (int(idx_val),),
                 ).fetchone()
                 if row:
+                    raw_chunk = row[2] or ""
+                    # Safeguard: if chunk text was polluted with Title header, clean it
+                    if raw_chunk.startswith("Tiêu đề:") and "\nNội dung: " in raw_chunk:
+                        clean_text = raw_chunk.split("\nNội dung: ", 1)[-1].strip()
+                        ctx_text = raw_chunk
+                    else:
+                        clean_text = raw_chunk
+                        ctx_text = f"Tiêu đề: {row[3]}\nNội dung: {raw_chunk}" if row[3] else raw_chunk
+
                     meta = {
                         "doc_id": row[0],
                         "chunk_id": row[1],
-                        "chunk_text": row[2],
+                        "chunk_text": clean_text,
+                        "contextual_text": ctx_text,
                         "title": row[3],
                         "lang": row[4],
                     }
@@ -91,7 +101,12 @@ class DenseIndex:
             for dist, idx in zip(distances[0], indices[0]):
                 if idx < 0 or idx >= len(self.chunk_ids):
                     continue
-                results.append((self.chunk_ids[idx], float(dist), self.chunk_metadata[idx]))
+                m = dict(self.chunk_metadata[idx])
+                raw_chunk = m.get("chunk_text", "")
+                if raw_chunk.startswith("Tiêu đề:") and "\nNội dung: " in raw_chunk:
+                    m["contextual_text"] = raw_chunk
+                    m["chunk_text"] = raw_chunk.split("\nNội dung: ", 1)[-1].strip()
+                results.append((self.chunk_ids[idx], float(dist), m))
 
         return results
 
@@ -149,12 +164,15 @@ class DenseIndex:
                         if not line.strip():
                             continue
                         c = json.loads(line)
+                        raw_c = c.get("chunk_text", "")
+                        if raw_c.startswith("Tiêu đề:") and "\nNội dung: " in raw_c:
+                            raw_c = raw_c.split("\nNội dung: ", 1)[-1].strip()
                         batch.append(
                             (
                                 i,
                                 str(c.get("doc_id", "")),
                                 str(c.get("chunk_id", "")),
-                                c.get("contextual_text") or c.get("chunk_text", ""),
+                                raw_c,
                                 c.get("title", ""),
                                 c.get("lang", "en"),
                             )
@@ -186,12 +204,15 @@ class DenseIndex:
                 batch = []
                 with open(meta_file, "rb") as f:
                     for i, c in enumerate(ijson.items(f, "chunk_metadata.item")):
+                        raw_c = c.get("chunk_text", "")
+                        if raw_c.startswith("Tiêu đề:") and "\nNội dung: " in raw_c:
+                            raw_c = raw_c.split("\nNội dung: ", 1)[-1].strip()
                         batch.append(
                             (
                                 i,
                                 str(c.get("doc_id", "")),
                                 str(c.get("chunk_id", "")),
-                                c.get("contextual_text") or c.get("chunk_text", ""),
+                                raw_c,
                                 c.get("title", ""),
                                 c.get("lang", "en"),
                             )

@@ -20,6 +20,15 @@ def normalize_doc_id(doc_id: Any) -> int | str:
         return str(doc_id)
 
 
+def clean_chunk_text(text: str) -> str:
+    """Ensures chunk_text contains purely the verbatim passage from document without any contextual headers."""
+    if not text:
+        return ""
+    if text.startswith("Tiêu đề:") and "\nNội dung: " in text:
+        text = text.split("\nNội dung: ", 1)[-1]
+    return text.strip()
+
+
 class ChunkSubmission(BaseModel):
     doc_id: int | str = Field(
         ..., description="Original document ID (Vietnamese/Chinese BTC ID as int or English PMID)"
@@ -52,7 +61,11 @@ class SubmissionPackage:
                     norm_item["relevant_docs"] = [normalize_doc_id(d) for d in norm_item["relevant_docs"]]
                 if "relevant_chunks" in norm_item:
                     norm_item["relevant_chunks"] = [
-                        {**c, "doc_id": normalize_doc_id(c["doc_id"])}
+                        {
+                            **c,
+                            "doc_id": normalize_doc_id(c["doc_id"]),
+                            "chunk_text": clean_chunk_text(c.get("chunk_text", "")),
+                        }
                         for c in norm_item["relevant_chunks"]
                     ]
                 sub = QuerySubmission(**norm_item)

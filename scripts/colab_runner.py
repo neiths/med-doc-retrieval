@@ -121,7 +121,10 @@ def run_pipeline(
     pipeline = MedicalRetrievalPipeline(config=config)
 
     dense_exists = (config.paths.indices_dir / "dense_index.faiss").exists()
-    sparse_exists = (config.paths.indices_dir / "bm25_index.pkl").exists()
+    sparse_exists = (
+        (config.paths.indices_dir / "bm25_index.pkl").exists()
+        or (config.paths.indices_dir / "bm25s_index").exists()
+    )
 
     if rebuild_indices or not dense_exists:
         logger.info(f"Building FAISS & BM25 indices from {corpus_dir}...")
@@ -282,9 +285,9 @@ def main():
             env["HF_TOKEN"] = args.hf_token
         res = subprocess.run([hf_bin, "sync", args.index_bucket_uri, str(indices_dir)], env=env)
         dense_found = (indices_dir / "dense_index.faiss").exists()
-        sparse_found = (indices_dir / "bm25_index.pkl").exists()
+        sparse_found = (indices_dir / "bm25_index.pkl").exists() or (indices_dir / "bm25s_index").exists()
         if dense_found and sparse_found:
-            logger.info("Found pre-built FAISS + BM25 index from HF bucket! Skipping rebuild.")
+            logger.info("Found pre-built FAISS + BM25(s) index from HF bucket! Skipping rebuild.")
             rebuild = False
         elif dense_found:
             logger.info("Found pre-built FAISS dense index from HF bucket. Will reuse dense and verify BM25.")
