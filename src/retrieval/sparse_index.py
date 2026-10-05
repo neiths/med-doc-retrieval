@@ -14,28 +14,20 @@ from pyvi import ViTokenizer
 from src.ingestion.cleaner import detect_language
 
 
+RE_WORDS = re.compile(r"\w+")
+
+
 def tokenize_multilingual(text: str, lang: str = "auto") -> list[str]:
     """Tokenizes text based on detected or specified language."""
     if not text:
         return []
 
-    if lang == "auto":
-        lang = detect_language(text)
-
     text_lower = text.lower()
-
-    if lang == "zh":
-        tokens = [t.strip() for t in jieba.lcut(text_lower) if t.strip()]
-    elif lang == "vi":
-        try:
-            tokenized_vi = ViTokenizer.tokenize(text_lower)
-            tokens = tokenized_vi.split()
-        except Exception:
-            tokens = re.findall(r"\w+", text_lower)
-    else:  # en or other
-        tokens = re.findall(r"\w+", text_lower)
-
-    return tokens
+    if lang == "zh" or (lang == "auto" and any("\u4e00" <= c <= "\u9fff" for c in text[:50])):
+        chars = [c for c in text_lower if not c.isspace()]
+        bigrams = [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
+        return chars + bigrams
+    return RE_WORDS.findall(text_lower)
 
 
 class SparseIndex:
