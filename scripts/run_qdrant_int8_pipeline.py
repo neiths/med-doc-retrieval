@@ -383,6 +383,35 @@ def run_inference_pipeline(
     print("=" * 60 + "\n")
 
 
+def ensure_hf_files(faiss_path: Path, sqlite_path: Path, queries_path: Path):
+    """Ensures required files exist, auto-pulling from Hugging Face Bucket if missing."""
+    bucket_uri = "hf://buckets/nieths/ViBioMIR"
+
+    if not sqlite_path.exists():
+        logger.info(f"{sqlite_path} not found locally! Auto-pulling from HF Bucket...")
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        res = os.system(f"hf cp {bucket_uri}/indices/chunks_meta.sqlite {sqlite_path}")
+        if res != 0 or not sqlite_path.exists():
+            logger.warning(f"Could not pull {sqlite_path} via 'hf cp'. Please ensure HF login.")
+
+    if not faiss_path.exists():
+        logger.info(f"{faiss_path} not found locally! Auto-pulling from HF Bucket...")
+        faiss_path.parent.mkdir(parents=True, exist_ok=True)
+        res = os.system(f"hf cp {bucket_uri}/indices/dense_index.faiss {faiss_path}")
+        if res != 0 or not faiss_path.exists():
+            logger.warning(f"Could not pull {faiss_path} via 'hf cp'. Please ensure HF login.")
+
+    if not queries_path.exists():
+        logger.info(f"{queries_path} not found locally! Auto-pulling from HF Bucket...")
+        queries_path.parent.mkdir(parents=True, exist_ok=True)
+        os.system(f"hf cp {bucket_uri}/processed/queries_enriched.jsonl {queries_path}")
+        if not queries_path.exists():
+            logger.info("Attempting fallback to dataset AIGuruTinix/ViBioMIR query.parquet...")
+            os.system(
+                f"hf download AIGuruTinix/ViBioMIR query.parquet --repo-type dataset --local-dir {queries_path.parent}"
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Unified Pipeline: Qdrant Int8 Build + Dual-GPU Score Fusion Inference"
@@ -458,6 +487,13 @@ def main():
 
     args = parser.parse_args()
     device_embed, device_rerank = setup_devices()
+
+    # Automatically ensure files exist locally
+    ensure_hf_files(
+        faiss_path=args.faiss_path,
+        sqlite_path=args.sqlite_path,
+        queries_path=args.queries_path,
+    )
 
     # Default to running both if neither flag is passed
     run_build = args.build or (not args.build and not args.infer)
