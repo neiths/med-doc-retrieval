@@ -74,9 +74,10 @@ def load_candidate_urls(
     shard_id: int = 0,
     num_shards: int = 1,
     priority_only: bool = False,
+    already_scraped: set[str] | None = None,
     max_urls: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Loads URLs from Parquet or JSONL, applies sharding, filtering, and domain interleaving."""
+    """Loads URLs from Parquet or JSONL, applies sharding, filtering, and fair domain interleaving."""
     if not input_file.exists():
         logger.info(f"Input file {input_file} not found locally. Auto-downloading from Hugging Face (AIGuruTinix/ViBioMIR)...")
         try:
@@ -118,14 +119,22 @@ def load_candidate_urls(
 
     logger.info(f"Shard {shard_id} loaded {len(raw_items):,} initial candidate URLs.")
 
-    # 1. Filter out obvious junk URLs
+    # 1. Filter out obvious junk URLs and already scraped IDs
+    scraped_set = already_scraped or set()
     valid_items = []
+    skipped_scraped = 0
     for it in raw_items:
+        uid = str(it.get("id"))
+        if uid in scraped_set:
+            skipped_scraped += 1
+            continue
         u = it.get("url")
         if u and not JUNK_URL_PATTERN.search(u):
             valid_items.append(it)
 
-    logger.info(f"Filtered out junk URLs: {len(valid_items):,} valid candidates remain.")
+    if skipped_scraped > 0:
+        logger.info(f"Deduplication: skipped {skipped_scraped:,} URLs already scraped in existing corpus.")
+    logger.info(f"Remaining valid uncrawled candidates: {len(valid_items):,}.")
 
     # 2. Group by domain for round-robin interleaving
     domain_buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -136,23 +145,26 @@ def load_candidate_urls(
             domain = "other"
         domain_buckets[domain].append(it)
 
-    # 3. Order: Priority domains first, then round-robin interleave
-    interleaved_items: list[dict[str, Any]] = []
-
-    # Sort domains by priority
-    sorted_domains = sorted(
-        domain_buckets.keys(),
-        key=lambda d: (
-            0 if any(p in d for p in PRIORITY_DOMAINS) else 1,
-            -len(domain_buckets[d]),
-        ),
-    )
-
+    # 3. Order domains: Fair round-robin across all domains (no priority bias)
     if priority_only:
+        sorted_domains = sorted(
+            domain_buckets.keys(),
+            key=lambda d: (
+                0 if any(p in d for p in PRIORITY_DOMAINS) else 1,
+                -len(domain_buckets[d]),
+            ),
+        )
         sorted_domains = [d for d in sorted_domains if any(p in d for p in PRIORITY_DOMAINS)]
         logger.info(f"Priority mode: restricted to {len(sorted_domains)} authoritative domains.")
+    else:
+        # Fair round-robin across all available domains to crawl the entire corpus equally
+        sorted_domains = sorted(
+            domain_buckets.keys(),
+            key=lambda d: -len(domain_buckets[d]),
+        )
 
     # Round-robin selection in O(N) using zip_longest (avoids O(N^2) list.pop(0))
+    interleaved_items: list[dict[str, Any]] = []
     for tuple_item in itertools.zip_longest(*(domain_buckets[d] for d in sorted_domains)):
         for it in tuple_item:
             if it is not None:
@@ -193,6 +205,31 @@ def get_already_scraped_ids(
         else:
             files_to_check.append(rp)
 
+    # Auto-fallback: if no existing IDs loaded, check local or remote scraped_ids.parquet
+    if not files_to_check or all(not f.exists() for f in files_to_check):
+        auto_scraped_pq = Path("data/processed/scraped_ids.parquet")
+        auto_scraped_txt = Path("data/processed/scraped_ids.txt")
+        corpus_dir = Path("data/processed/parquet_corpus")
+
+        if auto_scraped_pq.exists():
+            files_to_check.append(auto_scraped_pq)
+        elif auto_scraped_txt.exists():
+            files_to_check.append(auto_scraped_txt)
+        elif corpus_dir.exists() and list(corpus_dir.glob("*.parquet")):
+            files_to_check.extend(sorted(corpus_dir.glob("*.parquet")))
+        else:
+            # Auto-download compact 0.68 MB filter from Hugging Face bucket
+            logger.info("Auto-downloading scraped_ids filter (0.68 MB) from Hugging Face Bucket...")
+            try:
+                auto_scraped_pq.parent.mkdir(parents=True, exist_ok=True)
+                cmd = f"hf cp hf://buckets/nieths/ViBioMIR/scraped_ids.parquet {auto_scraped_pq}"
+                res = os.system(cmd)
+                if res == 0 and auto_scraped_pq.exists():
+                    files_to_check.append(auto_scraped_pq)
+                    logger.info("Successfully fetched remote scraped_ids filter!")
+            except Exception as e:
+                logger.warning(f"Could not auto-download scraped_ids filter: {e}")
+
     for fpath in files_to_check:
         if not fpath.exists():
             continue
@@ -210,6 +247,15 @@ def get_already_scraped_ids(
                     logger.info(f"Loaded {len(ids):,} existing doc_ids from Parquet {fpath.name}")
                 except Exception as e:
                     logger.warning(f"Could not load IDs from {fpath}: {e}")
+        elif fpath.suffix == ".txt":
+            count = 0
+            with open(fpath, "r", encoding="utf-8") as f:
+                for line in f:
+                    did = line.strip()
+                    if did:
+                        existing_ids.add(did)
+                        count += 1
+            logger.info(f"Loaded {count:,} existing doc_ids from text filter {fpath.name}")
         else:
             count = 0
             with open(fpath, encoding="utf-8") as f:
@@ -435,16 +481,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Load & prepare URLs
+    # 1. Load already scraped IDs (from resume_from, output_file, local parquet, or auto-download from HF)
+    existing_ids = get_already_scraped_ids(args.output, resume_from=args.resume_from)
+
+    # 2. Load & prepare URLs with upfront deduplication and fair domain interleaving
     items = load_candidate_urls(
         input_file=args.input,
         shard_id=args.shard_id,
         num_shards=args.num_shards,
         priority_only=args.priority_only,
-        max_urls=None if args.resume_from else args.limit,
+        already_scraped=existing_ids,
+        max_urls=args.limit,
     )
 
-    # Run crawler
+    # 3. Run crawler
     asyncio.run(
         run_crawler_pipeline(
             items=items,
