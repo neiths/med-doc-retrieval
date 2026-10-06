@@ -205,7 +205,8 @@ def search_qdrant_hybrid(
     sparse_vec: models.SparseVector,
     top_k: int = 100,
 ) -> list[dict[str, Any]]:
-    """Executes native Qdrant Hybrid Search with Score Fusion."""
+    """Executes native Qdrant Hybrid Search with Distribution-Based Score Fusion (DBSF) or RRF."""
+    fusion_algo = getattr(models.Fusion, "DBSF", models.Fusion.RRF)
     try:
         prefetch = [
             models.Prefetch(query=dense_vec, using="dense-bge", limit=top_k),
@@ -218,12 +219,12 @@ def search_qdrant_hybrid(
         res = client.query_points(
             collection_name=collection_name,
             prefetch=prefetch,
-            query=models.FusionQuery(fusion=models.Fusion.SCORE),
+            query=models.FusionQuery(fusion=fusion_algo),
             limit=top_k,
         )
         points = res.points
     except Exception as e:
-        logger.warning(f"Hybrid Score fusion query failed ({e}). Falling back to pure dense search.")
+        logger.warning(f"Hybrid fusion query failed ({e}). Falling back to pure dense search.")
         res = client.query_points(
             collection_name=collection_name,
             query=dense_vec,
