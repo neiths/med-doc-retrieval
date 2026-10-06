@@ -40,9 +40,7 @@ class ChunksTokenStream:
                     chars = [c for c in t_lower if not c.isspace()]
                     yield chars + [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
                 else:
-                    words = RE_WORDS.findall(t_lower)
-                    bigrams = [f"{words[i]}_{words[i + 1]}" for i in range(len(words) - 1)]
-                    yield words + bigrams
+                    yield RE_WORDS.findall(t_lower)
 
 
 class SqliteTokenStream:
@@ -64,9 +62,7 @@ class SqliteTokenStream:
                 chars = [c for c in t_lower if not c.isspace()]
                 yield chars + [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
             else:
-                words = RE_WORDS.findall(t_lower)
-                bigrams = [f"{words[i]}_{words[i + 1]}" for i in range(len(words) - 1)]
-                yield words + bigrams
+                yield RE_WORDS.findall(t_lower)
         conn.close()
 
 

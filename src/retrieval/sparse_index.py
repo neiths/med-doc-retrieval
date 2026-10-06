@@ -18,13 +18,7 @@ RE_WORDS = re.compile(r"\w+")
 
 
 def tokenize_multilingual(text: str, lang: str = "auto") -> list[str]:
-    """Tokenizes text based on detected or specified language into unigrams + bigrams.
-
-    Guarantees:
-    - Vietnamese & English: Extracts word unigrams + adjacent word bigrams (e.g. 'sỏi', 'thận', 'sỏi_thận').
-      Preserves compound medical terms with zero external dependency overhead and high IDF.
-    - Chinese: Extracts character unigrams + character bigrams.
-    """
+    """Tokenizes text based on detected or specified language."""
     if not text:
         return []
 
@@ -33,12 +27,7 @@ def tokenize_multilingual(text: str, lang: str = "auto") -> list[str]:
         chars = [c for c in text_lower if not c.isspace()]
         bigrams = [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
         return chars + bigrams
-
-    words = RE_WORDS.findall(text_lower)
-    if not words:
-        return []
-    bigrams = [f"{words[i]}_{words[i + 1]}" for i in range(len(words) - 1)]
-    return words + bigrams
+    return RE_WORDS.findall(text_lower)
 
 
 class SparseIndex:
