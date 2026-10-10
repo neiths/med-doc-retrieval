@@ -48,10 +48,10 @@ reranker:
   model_name: "BAAI/bge-reranker-large"
   batch_size: 32            # 32 locally, can be 64 on Colab/Kaggle
   device: "auto"
-  top_k_chunks: 150         # Increased from 75 to 150 to boost Macro Chunk Recall & F2
+  top_k_chunks: 220         # Increased to 220 to feed rich adjacent chunks to stitcher
   top_k_docs: 70            # Tuned to BTC gold average of ~71.0 docs
   score_threshold: -8.0     # Relaxed to capture maximum Recall for Macro F2
-  max_chunks_per_doc: 3     # Allow up to 3 chunks per top-relevant doc
+  max_chunks_per_doc: 4     # Allow up to 4 chunks per top-relevant doc for contiguous stitching
 
 query_translation:
   enabled: true

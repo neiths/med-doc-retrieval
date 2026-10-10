@@ -29,6 +29,105 @@ def clean_chunk_text(text: str) -> str:
     return text.strip()
 
 
+def stitch_two_texts(
+    t1: str,
+    t2: str,
+    min_overlap: int = 25,
+    max_overlap: int = 350,
+    max_merged_len: int = 3500,
+) -> str | None:
+    """Merges two text chunks if they overlap or one contains the other."""
+    if not t1 or not t2:
+        return None
+    if t2 in t1:
+        return t1
+    if t1 in t2:
+        return t2
+
+    limit = min(len(t1), len(t2), max_overlap)
+    for ov in range(limit, min_overlap - 1, -1):
+        if t1[-ov:] == t2[:ov]:
+            merged = t1 + t2[ov:]
+            if len(merged) <= max_merged_len:
+                return merged
+
+    for ov in range(limit, min_overlap - 1, -1):
+        if t2[-ov:] == t1[:ov]:
+            merged = t2 + t1[ov:]
+            if len(merged) <= max_merged_len:
+                return merged
+
+    return None
+
+
+def stitch_chunks_for_query(
+    chunks: list[dict[str, Any]],
+    min_overlap: int = 25,
+    max_overlap: int = 350,
+    max_merged_len: int = 3500,
+) -> list[dict[str, Any]]:
+    """Groups chunks by doc_id and stitches contiguous/overlapping passages."""
+    if not chunks:
+        return []
+
+    by_doc: dict[Any, list[str]] = {}
+    doc_order: list[Any] = []
+
+    for c in chunks:
+        did = normalize_doc_id(c.get("doc_id"))
+        text = clean_chunk_text(c.get("chunk_text", ""))
+        if not text:
+            continue
+        if did not in by_doc:
+            by_doc[did] = []
+            doc_order.append(did)
+        by_doc[did].append(text)
+
+    stitched_chunks: list[dict[str, Any]] = []
+
+    for did in doc_order:
+        texts = by_doc[did]
+        if len(texts) <= 1:
+            for t in texts:
+                stitched_chunks.append({"doc_id": did, "chunk_text": t})
+            continue
+
+        merged = list(texts)
+        changed = True
+        while changed:
+            changed = False
+            new_merged = []
+            skip = set()
+            for i in range(len(merged)):
+                if i in skip:
+                    continue
+                cur = merged[i]
+                for j in range(i + 1, len(merged)):
+                    if j in skip:
+                        continue
+                    nxt = merged[j]
+                    res = stitch_two_texts(
+                        cur,
+                        nxt,
+                        min_overlap=min_overlap,
+                        max_overlap=max_overlap,
+                        max_merged_len=max_merged_len,
+                    )
+                    if res is not None:
+                        cur = res
+                        skip.add(j)
+                        changed = True
+                new_merged.append(cur)
+            merged = new_merged
+
+        for t in merged:
+            clipped_t = t[:max_merged_len].strip() if len(t) > max_merged_len else t
+            if clipped_t:
+                stitched_chunks.append({"doc_id": did, "chunk_text": clipped_t})
+
+    return stitched_chunks
+
+
 class ChunkSubmission(BaseModel):
     doc_id: int | str = Field(
         ..., description="Original document ID (Vietnamese/Chinese BTC ID as int or English PMID)"
@@ -50,23 +149,28 @@ class SubmissionPackage:
     """Manages validation and ZIP packaging of official competition submissions."""
 
     @staticmethod
-    def validate_submission_data(data: list[dict[str, Any]]) -> list[QuerySubmission]:
+    def validate_submission_data(
+        data: list[dict[str, Any]],
+        stitch_adjacent: bool = True,
+    ) -> list[QuerySubmission]:
         """Validates that predictions conform to the official competition schema."""
         validated = []
         for idx, item in enumerate(data):
             try:
-                # Normalize doc_ids according to BTC rule: corpus IDs as int, PubMed as str
                 norm_item = dict(item)
                 if "relevant_docs" in norm_item:
                     norm_item["relevant_docs"] = [normalize_doc_id(d) for d in norm_item["relevant_docs"]]
                 if "relevant_chunks" in norm_item:
+                    raw_chunks = norm_item["relevant_chunks"]
+                    if stitch_adjacent:
+                        raw_chunks = stitch_chunks_for_query(raw_chunks)
                     norm_item["relevant_chunks"] = [
                         {
                             **c,
                             "doc_id": normalize_doc_id(c["doc_id"]),
                             "chunk_text": clean_chunk_text(c.get("chunk_text", "")),
                         }
-                        for c in norm_item["relevant_chunks"]
+                        for c in raw_chunks
                     ]
                 sub = QuerySubmission(**norm_item)
                 validated.append(sub)

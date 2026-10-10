@@ -217,3 +217,34 @@ med-doc-retrieval/
   1. Nâng `hybrid_top_k` lên $300 - 400$ để mở rộng candidate pool.
   2. Nâng `top_k_chunks` lên $120 - 150$ chunks/query để tăng độ phủ Recall cho Macro F2.
   3. Áp dụng Paragraph-Aware Chunking (cắt theo cấu trúc đoạn tự nhiên `\n\n` ~400-500 ký tự) để khớp ranh giới chấm điểm LCS token của BTC.
+
+---
+
+## 6. Hướng Dẫn Cập Nhật Dữ Liệu Tăng Dần (Incremental Index Update)
+
+Khi bạn cào thêm bài viết mới từ Hugging Face hoặc web, **không cần phải chạy lại toàn bộ từ đầu (tiết kiệm 3-5 tiếng chạy GPU)**. Hệ thống hỗ trợ cập nhật tăng dần qua script [`scripts/append_to_index.py`](file:///home/thienhb/Workspace/med-doc-retrieval/scripts/append_to_index.py):
+
+```mermaid
+flowchart LR
+    NEW["Dữ liệu cào mới<br/>(JSONL / Parquet)"] --> DEDUP{"Lọc trùng doc_id<br/>với SQLite"}
+    DEDUP -- Bài viết mới --> CHK["Cắt Chunk mới"]
+    CHK --> SQL["1. Append vào SQLite<br/>(idx = max_idx + 1)"]
+    CHK --> EMB["2. BGE-M3 Encode (GPU)<br/>(Chỉ encode chunk mới)"]
+    EMB --> FAISS["faiss_index.add()<br/>(Ghi đè dense_index.faiss)"]
+    SQL --> BM25["3. Rebuild BM25s Stream<br/>(Chỉ mất ~2 phút trên CPU)"]
+    FAISS & SQL & BM25 --> DONE["Index sẵn sàng inference!"]
+```
+
+### Lệnh thực thi:
+```bash
+python scripts/append_to_index.py \
+    --new-data data/raw/crawled_new_shard.jsonl \
+    --indices-dir data/indices \
+    --batch-size 64 \
+    --sync-to-bucket
+```
+* **FAISS**: Dùng hàm `faiss_index.add(new_vectors)` chỉ nạp vector mới.
+* **SQLite**: Chèn nối tiếp `(idx, doc_id, chunk_id, chunk_text, title, lang)` vào `chunks_meta.sqlite`.
+* **BM25s**: Xây lại tự động dạng streaming từ SQLite trong ~2 phút (bộ nhớ RAM < 350MB).
+* **Đồng bộ**: Tự động sync các index mới lên Hugging Face Bucket nếu có cờ `--sync-to-bucket`.
+
