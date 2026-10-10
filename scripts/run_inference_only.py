@@ -81,6 +81,30 @@ def main():
         action="store_true",
         help="Skip slow live PubMed HTTP API calls, rely purely on local cache and corpus.",
     )
+    parser.add_argument(
+        "--hybrid-top-k",
+        type=int,
+        default=None,
+        help="Override hybrid_top_k candidates retrieved before reranking (e.g. 350).",
+    )
+    parser.add_argument(
+        "--top-k-chunks",
+        type=int,
+        default=None,
+        help="Override top_k_chunks to output in submission (e.g. 150).",
+    )
+    parser.add_argument(
+        "--top-k-docs",
+        type=int,
+        default=None,
+        help="Override top_k_docs to output in submission (e.g. 70).",
+    )
+    parser.add_argument(
+        "--max-chunks-per-doc",
+        type=int,
+        default=None,
+        help="Override max_chunks_per_doc (e.g. 3).",
+    )
 
     args = parser.parse_args()
     setup_inference_env()
@@ -90,6 +114,24 @@ def main():
     config.reranker.batch_size = args.batch_size
     config.embedding.device = "cuda" if torch.cuda.is_available() else "cpu"
     config.reranker.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if args.hybrid_top_k is not None:
+        config.retrieval.hybrid_top_k = args.hybrid_top_k
+        config.retrieval.dense_top_k = args.hybrid_top_k
+        config.retrieval.sparse_top_k = args.hybrid_top_k
+    if args.top_k_chunks is not None:
+        config.reranker.top_k_chunks = args.top_k_chunks
+    if args.top_k_docs is not None:
+        config.reranker.top_k_docs = args.top_k_docs
+    if args.max_chunks_per_doc is not None:
+        config.reranker.max_chunks_per_doc = args.max_chunks_per_doc
+
+    logger.info(
+        f"Retrieval Settings: hybrid_top_k={config.retrieval.hybrid_top_k} | "
+        f"top_k_chunks={config.reranker.top_k_chunks} | "
+        f"top_k_docs={config.reranker.top_k_docs} | "
+        f"max_chunks_per_doc={getattr(config.reranker, 'max_chunks_per_doc', 2)}"
+    )
 
     if args.disable_pubmed_network:
         logger.info("Live PubMed network requests disabled for maximum speed. Using offline cache only.")

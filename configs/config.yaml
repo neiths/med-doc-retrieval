@@ -35,23 +35,23 @@ retrieval:
   engine: "faiss"           # "faiss" (high performance, 1.3GB RAM) or "qdrant"
   qdrant_path: "data/indices/qdrant_db"
   collection_name: "medical_chunks"
-  dense_top_k: 150          # Scaled for 1.5M chunks
-  sparse_top_k: 150         # Scaled for 1.5M chunks
+  dense_top_k: 350          # Scaled for 1.5M chunks (expanded candidate pool)
+  sparse_top_k: 350         # Scaled for 1.5M chunks (expanded candidate pool)
   fusion_method: "rrf"      # "rrf" (Reciprocal Rank Fusion)
   rrf_k: 60
   dense_weight: 0.6
   sparse_weight: 0.4
-  hybrid_top_k: 150         # Feed 150 diverse candidates to reranker
+  hybrid_top_k: 350         # Feed 350 diverse candidates to reranker to boost recall
 
 reranker:
   enabled: true
   model_name: "BAAI/bge-reranker-large"
   batch_size: 32            # 32 locally, can be 64 on Colab/Kaggle
   device: "auto"
-  top_k_chunks: 75          # Tuned to BTC gold average of ~74.7 chunks
-  top_k_docs: 60            # Tuned to BTC gold average of ~71.0 docs
+  top_k_chunks: 150         # Increased from 75 to 150 to boost Macro Chunk Recall & F2
+  top_k_docs: 70            # Tuned to BTC gold average of ~71.0 docs
   score_threshold: -8.0     # Relaxed to capture maximum Recall for Macro F2
-  max_chunks_per_doc: 2     # Maintain high diversity across 60 docs
+  max_chunks_per_doc: 3     # Allow up to 3 chunks per top-relevant doc
 
 query_translation:
   enabled: true
