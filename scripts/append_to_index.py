@@ -240,7 +240,13 @@ def main():
         enable_contextual=config.chunking.enable_contextual,
     )
 
-    # 1. Connect to SQLite and check existing counts
+    # 1. Load existing FAISS index first
+    logger.info(f"Loading existing FAISS index (read-write mode) from {faiss_path}...")
+    faiss_index = faiss.read_index(str(faiss_path))
+    faiss_ntotal = faiss_index.ntotal
+    logger.info(f"Existing FAISS vector count: {faiss_ntotal:,}")
+
+    # 2. Connect to SQLite metadata index and ensure strict 1:1 synchronization
     logger.info(f"Connecting to SQLite metadata index: {sqlite_path}")
     conn = sqlite3.connect(sqlite_path)
     cur = conn.cursor()
@@ -249,12 +255,31 @@ def main():
     current_count, current_max_idx = cur.fetchone()
     logger.info(f"Existing chunks in SQLite: {current_count:,} (max idx: {current_max_idx})")
 
+    # Auto-repair if previous run crashed after inserting into SQLite before FAISS was updated
+    if current_max_idx >= faiss_ntotal or current_count > faiss_ntotal:
+        logger.warning(
+            f"Count mismatch detected: SQLite has {current_count:,} chunks (max idx: {current_max_idx}), "
+            f"but FAISS only has {faiss_ntotal:,} vectors! "
+            f"Automatically repairing SQLite by removing un-indexed chunks where idx >= {faiss_ntotal}..."
+        )
+        cur.execute("DELETE FROM chunks WHERE idx >= ?", (faiss_ntotal,))
+        conn.commit()
+        cur.execute("SELECT COUNT(*), COALESCE(MAX(idx), -1) FROM chunks")
+        current_count, current_max_idx = cur.fetchone()
+        logger.info(f"SQLite successfully aligned to FAISS: {current_count:,} chunks (max idx: {current_max_idx}).")
+
+    if current_count != faiss_ntotal:
+        logger.warning(
+            f"Warning: SQLite has {current_count:,} chunks while FAISS has {faiss_ntotal:,} vectors. "
+            f"Expected both to match {faiss_ntotal:,}."
+        )
+
     # Load existing doc_ids to prevent duplicate insertion
     cur.execute("SELECT DISTINCT doc_id FROM chunks")
     existing_doc_ids = {str(r[0]) for r in cur.fetchall()}
     logger.info(f"Loaded {len(existing_doc_ids):,} existing unique doc_ids.")
 
-    # 2. Load and filter new articles
+    # 3. Load and filter new articles
     raw_articles = load_new_articles(args.new_data)
     logger.info(f"Loaded total {len(raw_articles):,} candidate articles from input files.")
 
@@ -274,9 +299,10 @@ def main():
     logger.info(f"New unique articles to chunk & index: {len(new_articles):,}")
     if not new_articles:
         logger.info("No new articles to add! All articles already exist in index.")
+        conn.close()
         return
 
-    # 3. Chunk new articles
+    # 4. Chunk new articles
     logger.info("Chunking new articles...")
     new_chunks = []
     for art in tqdm(new_articles, desc="Chunking"):
@@ -297,44 +323,10 @@ def main():
     logger.info(f"Generated {len(new_chunks):,} new chunks.")
     if not new_chunks:
         logger.info("No valid chunks produced. Exiting.")
+        conn.close()
         return
 
-    # 4. Append new chunks to SQLite metadata
-    logger.info(f"Appending {len(new_chunks):,} chunks to SQLite...")
-    start_idx = current_max_idx + 1
-    rows_to_insert = []
-    for offset, c in enumerate(new_chunks):
-        chunk_idx = start_idx + offset
-        rows_to_insert.append(
-            (
-                chunk_idx,
-                str(c.doc_id),
-                str(c.chunk_id),
-                c.chunk_text,
-                c.metadata.get("title", "") if c.metadata else "",
-                c.lang or "vi",
-            )
-        )
-
-    cur.executemany(
-        "INSERT INTO chunks (idx, doc_id, chunk_id, chunk_text, title, lang) VALUES (?, ?, ?, ?, ?, ?)",
-        rows_to_insert,
-    )
-    conn.commit()
-    conn.close()
-    logger.info(f"SQLite successfully updated. New total chunks: {start_idx + len(new_chunks):,}")
-
-    # 5. Encode new chunks and append to FAISS
-    logger.info("Loading existing FAISS index (read-write mode)...")
-    faiss_index = faiss.read_index(str(faiss_path))
-    logger.info(f"Existing FAISS vector count: {faiss_index.ntotal:,}")
-
-    if faiss_index.ntotal != current_count:
-        logger.warning(
-            f"Count mismatch: FAISS has {faiss_index.ntotal:,} vectors, "
-            f"but SQLite had {current_count:,} chunks! Proceeding with append."
-        )
-
+    # 5. Encode new chunks with BGE-M3
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Initializing BGE-M3 Embedder on {device} (fp16=True)...")
     embedder = BGEM3Embedder(
@@ -345,15 +337,23 @@ def main():
     )
 
     texts_to_embed = [c.contextual_text or c.chunk_text for c in new_chunks]
-    logger.info(f"Encoding {len(texts_to_embed):,} new chunks with BGE-M3...")
+    logger.info(f"Encoding {len(texts_to_embed):,} new chunks with BGE-M3 (batch_size={args.batch_size})...")
     t_emb = time.time()
-    new_embeddings = embedder.encode(texts_to_embed, show_progress=True)
-    logger.info(f"Encoding completed in {time.time() - t_emb:.1f}s.")
 
-    # Ensure float32 for FAISS IndexFlatIP
-    if new_embeddings.dtype != np.float32:
-        new_embeddings = new_embeddings.astype(np.float32)
+    # Encode in sub-batches of 5,000 to display tqdm progress and avoid massive memory allocations
+    encode_chunk_size = 5000
+    all_embeddings = []
+    for i in tqdm(range(0, len(texts_to_embed), encode_chunk_size), desc="Encoding chunks"):
+        batch_texts = texts_to_embed[i : i + encode_chunk_size]
+        emb = embedder.encode(batch_texts)
+        if emb.dtype != np.float32:
+            emb = emb.astype(np.float32)
+        all_embeddings.append(emb)
 
+    new_embeddings = np.vstack(all_embeddings)
+    logger.info(f"Encoding completed in {time.time() - t_emb:.1f}s. Shape: {new_embeddings.shape}")
+
+    # 6. Append vectors to FAISS and write to disk
     logger.info(f"Adding {len(new_embeddings):,} vectors to FAISS index...")
     faiss_index.add(new_embeddings)
     logger.info(f"Updated FAISS index ntotal: {faiss_index.ntotal:,}")
@@ -362,7 +362,30 @@ def main():
     faiss.write_index(faiss_index, str(faiss_path))
     logger.info("FAISS dense index successfully updated on disk.")
 
-    # 6. Rebuild BM25s sparse index (fast streaming from updated SQLite)
+    # 7. Append new chunks to SQLite metadata
+    logger.info(f"Appending {len(new_chunks):,} chunks to SQLite...")
+    start_idx = faiss_ntotal
+    rows_to_insert = [
+        (
+            start_idx + offset,
+            str(c.doc_id),
+            str(c.chunk_id),
+            c.chunk_text,
+            c.metadata.get("title", "") if c.metadata else "",
+            c.lang or "vi",
+        )
+        for offset, c in enumerate(new_chunks)
+    ]
+
+    cur.executemany(
+        "INSERT INTO chunks (idx, doc_id, chunk_id, chunk_text, title, lang) VALUES (?, ?, ?, ?, ?, ?)",
+        rows_to_insert,
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"SQLite successfully updated. New total chunks: {start_idx + len(new_chunks):,}")
+
+    # 8. Rebuild BM25s sparse index (fast streaming from updated SQLite)
     if not args.skip_bm25:
         rebuild_bm25s(sqlite_path=sqlite_path, output_bm25s_dir=bm25s_path)
     else:
