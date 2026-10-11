@@ -100,6 +100,27 @@ def rebuild_bm25s(sqlite_path: Path, output_bm25s_dir: Path):
     logger.info(f"BM25s sparse index rebuild completed in {time.time() - t0:.1f}s -> {output_bm25s_dir}")
 
 
+def load_hf_token(cli_token: str | None = None) -> str | None:
+    """Loads HF token from CLI argument, environment variable, or .env file."""
+    if cli_token and cli_token.strip():
+        return cli_token.strip()
+    env_token = os.environ.get("HF_TOKEN")
+    if env_token and env_token.strip():
+        return env_token.strip()
+    env_file = Path(".env")
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("HF_TOKEN="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if val:
+                        return val
+        except Exception:
+            pass
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Incremental Index Appender for ViBioMIR.")
     parser.add_argument(
@@ -135,12 +156,26 @@ def main():
     parser.add_argument(
         "--sync-to-bucket",
         action="store_true",
-        help="Upload updated index to Hugging Face Storage Bucket after completion.",
+        default=True,
+        help="Auto-upload updated index to Hugging Face Storage Bucket after completion (default: True).",
+    )
+    parser.add_argument(
+        "--no-sync",
+        dest="sync_to_bucket",
+        action="store_false",
+        help="Disable automatic upload to Hugging Face Storage Bucket.",
     )
     parser.add_argument(
         "--download-index-first",
         action="store_true",
-        help="Auto-download existing index from HF Bucket if missing locally.",
+        default=True,
+        help="Auto-download existing index from HF Bucket if missing locally (default: True).",
+    )
+    parser.add_argument(
+        "--no-download-index",
+        dest="download_index_first",
+        action="store_false",
+        help="Disable auto-downloading existing index from HF Bucket.",
     )
     parser.add_argument(
         "--bucket-uri",
@@ -157,10 +192,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Configure HF Token if provided
-    hf_token = args.hf_token or os.environ.get("HF_TOKEN")
+    # Configure HF Token and auto-login if available
+    hf_token = load_hf_token(args.hf_token)
     if hf_token:
         os.environ["HF_TOKEN"] = hf_token
+        try:
+            from huggingface_hub import login
+            login(token=hf_token, add_to_git_credential=False)
+            logger.info("Successfully authenticated with Hugging Face Hub.")
+        except Exception as e:
+            logger.debug(f"HF login notice: {e}")
 
     hf_bin = shutil.which("hf") or str(Path(sys.executable).parent / "hf") or "hf"
 
@@ -172,18 +213,22 @@ def main():
     # Auto-download from HF Bucket if missing on Kaggle
     if not faiss_path.exists() or not sqlite_path.exists():
         if args.download_index_first:
-            logger.info(f"Existing index not found locally in {args.indices_dir}. Downloading from {args.bucket_uri} ...")
+            logger.info(f"Existing index not found locally in {args.indices_dir}. Auto-downloading from {args.bucket_uri} ...")
             args.indices_dir.mkdir(parents=True, exist_ok=True)
             env = os.environ.copy()
             if hf_token:
                 env["HF_TOKEN"] = hf_token
-            subprocess.run([hf_bin, "sync", args.bucket_uri, str(args.indices_dir)], env=env)
-        
+            res = subprocess.run([hf_bin, "sync", args.bucket_uri, str(args.indices_dir)], env=env)
+            if res.returncode == 0:
+                logger.info("Successfully synced baseline index from HF Bucket!")
+            else:
+                logger.warning(f"Download returned exit code {res.returncode}. Proceeding to verify local files...")
+
         if not faiss_path.exists() or not sqlite_path.exists():
             raise FileNotFoundError(
                 f"Existing index files not found in {args.indices_dir}! "
                 f"Expected {faiss_path} and {sqlite_path}. "
-                "Use --download-index-first to auto-download from HF Bucket, or build baseline index first."
+                "Please check your internet connection or HF_TOKEN."
             )
 
     config = load_config(args.config)
