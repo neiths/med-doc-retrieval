@@ -138,25 +138,53 @@ def main():
         help="Upload updated index to Hugging Face Storage Bucket after completion.",
     )
     parser.add_argument(
+        "--download-index-first",
+        action="store_true",
+        help="Auto-download existing index from HF Bucket if missing locally.",
+    )
+    parser.add_argument(
         "--bucket-uri",
         type=str,
         default="hf://buckets/nieths/ViBioMIR/indices",
         help="HF Bucket URI to sync indices.",
     )
+    parser.add_argument(
+        "--hf-token",
+        type=str,
+        default=None,
+        help="Hugging Face Token (or set HF_TOKEN environment variable).",
+    )
 
     args = parser.parse_args()
+
+    # Configure HF Token if provided
+    hf_token = args.hf_token or os.environ.get("HF_TOKEN")
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
+
+    hf_bin = shutil.which("hf") or str(Path(sys.executable).parent / "hf") or "hf"
 
     # Verify existing indices
     faiss_path = args.indices_dir / "dense_index.faiss"
     sqlite_path = args.indices_dir / "chunks_meta.sqlite"
     bm25s_path = args.indices_dir / "bm25s_index"
 
+    # Auto-download from HF Bucket if missing on Kaggle
     if not faiss_path.exists() or not sqlite_path.exists():
-        raise FileNotFoundError(
-            f"Existing index files not found in {args.indices_dir}! "
-            f"Expected {faiss_path} and {sqlite_path}. "
-            "Please build baseline index first before incremental appending."
-        )
+        if args.download_index_first:
+            logger.info(f"Existing index not found locally in {args.indices_dir}. Downloading from {args.bucket_uri} ...")
+            args.indices_dir.mkdir(parents=True, exist_ok=True)
+            env = os.environ.copy()
+            if hf_token:
+                env["HF_TOKEN"] = hf_token
+            subprocess.run([hf_bin, "sync", args.bucket_uri, str(args.indices_dir)], env=env)
+        
+        if not faiss_path.exists() or not sqlite_path.exists():
+            raise FileNotFoundError(
+                f"Existing index files not found in {args.indices_dir}! "
+                f"Expected {faiss_path} and {sqlite_path}. "
+                "Use --download-index-first to auto-download from HF Bucket, or build baseline index first."
+            )
 
     config = load_config(args.config)
     chunker = DocumentChunker(
@@ -298,8 +326,10 @@ def main():
     # 7. Optional Sync to HF Storage Bucket
     if args.sync_to_bucket:
         logger.info(f"Syncing updated indices to HF Bucket: {args.bucket_uri} ...")
-        hf_bin = shutil.which("hf") or "hf"
+        hf_bin = shutil.which("hf") or str(Path(sys.executable).parent / "hf") or "hf"
         env = os.environ.copy()
+        if hf_token:
+            env["HF_TOKEN"] = hf_token
         res = subprocess.run([hf_bin, "sync", str(args.indices_dir), args.bucket_uri], env=env)
         if res.returncode == 0:
             logger.info("Hugging Face Bucket sync completed successfully!")
