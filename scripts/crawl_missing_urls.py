@@ -130,32 +130,8 @@ async def run_crawler(args):
     if args.hosts:
         target_hosts = set(args.hosts)
         rows = [r for r in rows if r["host"] in target_hosts]
-        logger.info(f"Filtered for hosts {target_hosts}: {len(rows):,} URLs remaining.")
+        logger.info(f"Filtered for hosts {target_hosts}: {len(rows):,} URLs matching target filter.")
 
-    # 2. Check already crawled IDs for resuming
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    crawled_ids = set()
-    for f in args.out_dir.glob("*.jsonl"):
-        try:
-            with open(f, "r", encoding="utf-8") as fp:
-                for line in fp:
-                    if line.strip():
-                        crawled_ids.add(json.loads(line)["doc_id"])
-        except Exception:
-            pass
-
-    todo = [r for r in rows if r["id"] not in crawled_ids]
-    logger.info(f"Already crawled: {len(crawled_ids):,} | Remaining to crawl: {len(todo):,}")
-
-    if args.limit and args.limit > 0:
-        todo = todo[: args.limit]
-        logger.info(f"Applied --limit {args.limit}: fetching {len(todo)} URLs.")
-
-    if not todo:
-        logger.info("No URLs to crawl!")
-        return
-
-    # 3. Setup client and run async queue
     crawler = AsyncArticleCrawler(
         concurrency=args.concurrency,
         max_domain_concurrency=args.domain_concurrency,
@@ -163,30 +139,71 @@ async def run_crawler(args):
         out_dir=args.out_dir,
     )
 
-    out_file = args.out_dir / f"crawled_shard_{int(time.time())}.jsonl"
-    logger.info(f"Writing outputs to {out_file}")
-
     limits = httpx.Limits(max_keepalive_connections=args.concurrency * 2, max_connections=args.concurrency * 3)
     timeout = httpx.Timeout(args.timeout)
 
-    success_count = 0
-    fail_count = 0
+    iteration = 0
+    while True:
+        iteration += 1
 
-    with open(out_file, "a", encoding="utf-8") as fp:
-        async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
-            tasks = [crawler.fetch_one(client, item) for item in todo]
-            for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Crawling URLs"):
-                res = await coro
-                if res:
-                    fp.write(json.dumps(res, ensure_ascii=False) + "\n")
-                    fp.flush()
-                    success_count += 1
-                else:
-                    fail_count += 1
+        # 2. Check already crawled IDs for resuming
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        crawled_ids = set()
+        for f in args.out_dir.glob("*.jsonl"):
+            try:
+                with open(f, "r", encoding="utf-8") as fp:
+                    for line in fp:
+                        if line.strip():
+                            crawled_ids.add(json.loads(line)["doc_id"])
+            except Exception:
+                pass
 
-    logger.info(
-        f"Completed crawl run! Success: {success_count:,} | Failed: {fail_count:,} | Output: {out_file}"
-    )
+        todo = [r for r in rows if r["id"] not in crawled_ids]
+        logger.info(
+            f"[Batch {iteration}] Already crawled: {len(crawled_ids):,} | Remaining to crawl: {len(todo):,}"
+        )
+
+        if not todo:
+            logger.info("All target URLs have been crawled! Done.")
+            break
+
+        batch_todo = todo[: args.limit] if args.limit and args.limit > 0 else todo
+        logger.info(f"[Batch {iteration}] Crawling next {len(batch_todo):,} URLs...")
+
+        out_file = args.out_dir / f"crawled_shard_{int(time.time())}.jsonl"
+        success_count = 0
+        fail_count = 0
+
+        with open(out_file, "a", encoding="utf-8") as fp:
+            async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
+                tasks = [crawler.fetch_one(client, item) for item in batch_todo]
+                for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc=f"Batch {iteration}"):
+                    res = await coro
+                    if res:
+                        fp.write(json.dumps(res, ensure_ascii=False) + "\n")
+                        fp.flush()
+                        success_count += 1
+                    else:
+                        fail_count += 1
+
+        logger.info(
+            f"[Batch {iteration}] Finished: Success={success_count:,}, Failed={fail_count:,} -> {out_file.name}"
+        )
+
+        if args.interval_minutes <= 0:
+            break
+
+        remaining = len(todo) - success_count
+        if remaining <= 0:
+            logger.info("All URLs finished. Exiting scheduling loop.")
+            break
+
+        sleep_secs = int(args.interval_minutes * 60)
+        logger.info(
+            f"Scheduled pause: Sleeping for {args.interval_minutes:.1f} minutes ({sleep_secs}s) to prevent domain ban. "
+            f"Remaining: {remaining:,} URLs. Next batch resumes automatically..."
+        )
+        await asyncio.sleep(sleep_secs)
 
 
 def main():
@@ -213,7 +230,7 @@ def main():
         "--limit",
         type=int,
         default=0,
-        help="Max URLs to fetch (0 for all).",
+        help="Max URLs to fetch per batch (0 for all).",
     )
     parser.add_argument(
         "--concurrency",
@@ -232,6 +249,12 @@ def main():
         type=float,
         default=12.0,
         help="HTTP request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--interval-minutes",
+        type=float,
+        default=0.0,
+        help="Interval in minutes between successive crawl batches (e.g. 8 for 8 mins). Default 0 (single run).",
     )
 
     args = parser.parse_args()
