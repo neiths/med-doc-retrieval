@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import random
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -92,6 +93,15 @@ class AsyncArticleCrawler:
                 for attempt in range(2):
                     try:
                         r = await client.get(url, headers=headers, follow_redirects=True)
+                        # Auto-solve JS cookie challenges (e.g. laodong.vn D1N cookie)
+                        if "document.cookie=" in r.text and len(r.text) < 500:
+                            m = re.search(r'document\.cookie="([^"]+)"', r.text)
+                            if m:
+                                cookie_str = m.group(1)
+                                k, v = cookie_str.split(";")[0].split("=", 1)
+                                client.cookies.set(k.strip(), v.strip(), domain=host)
+                                r = await client.get(url, headers=headers, follow_redirects=True)
+
                         if r.status_code == 200 and len(r.content) > 300:
                             # Extract structured text
                             extracted = extract_article_structured(r.text, url)
