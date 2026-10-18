@@ -25,12 +25,12 @@ case "$1" in
             exit 0
         fi
 
-        echo "Starting Health News crawler (150 URLs every 5 minutes)..."
+        echo "Starting continuous crawler for Health News portals..."
         nohup "$PYTHON_BIN" scripts/crawl_vietnamese.py \
             --group news \
-            --limit 150 \
-            --concurrency 15 \
-            --interval-minutes 5 \
+            --concurrency 20 \
+            --domain-concurrency 3 \
+            --cooldown-seconds 45 \
             >> "$LOG_FILE" 2>&1 &
 
         echo $! > "$PID_FILE"

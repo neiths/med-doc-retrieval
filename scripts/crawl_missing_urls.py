@@ -1,20 +1,25 @@
-"""B2 - High-performance resumable crawler for missing URLs with structured extractors (Mentor Day 1).
+"""B2 - High-performance resumable crawler with adaptive rate limiting and retry queue.
 
-1. Reads missing URLs from data/processed/v2/missing_urls.parquet (or custom file).
-2. Supports filtering by host (--hosts nhathuoclongchau.com.vn suckhoedoisong.vn ...).
-3. Applies domain-level rate limiting and cooldown backoff.
-4. Uses structured extractors (preserving H2/H3 headings and Q&A pairings).
-5. Appends output to streaming JSONL shards with auto-resume.
+Features:
+1. Continuous high-volume async crawling with configurable concurrency.
+2. Smart Ban & Failure Detection:
+   - Catches HTTP 429 (Rate Limit), 403 (Forbidden/Cloudflare), 502/503/504, and Timeouts.
+   - Puts failed/rate-limited URLs into an async Retry Queue with exponential backoff.
+   - Triggers per-domain cooldown (e.g. 45s pause ONLY for that domain) without stopping other domains!
+3. Automatic Re-try Feeder:
+   - Periodically re-injects delayed retry URLs back into active workers.
+4. Permanent Failure Logging:
+   - Real 404s or URLs exceeding max retries are cleanly logged to failed_urls.jsonl.
+5. Sharded Storage & Auto-Resume:
+   - Automatically writes to rotated JSONL shards (e.g. 5,000 articles per shard).
+   - Skips already crawled doc_ids on startup.
 
 Usage:
-    # Quick test on local (30 articles across top hosts):
-    python scripts/crawl_missing_urls.py --limit 30
+    # Continuous high-volume crawl for Long Chau with adaptive retry queue:
+    python scripts/crawl_missing_urls.py --hosts nhathuoclongchau.com.vn --concurrency 15
 
-    # Crawl specific host locally:
-    python scripts/crawl_missing_urls.py --hosts nhathuoclongchau.com.vn --limit 100
-
-    # Run full crawl:
-    python scripts/crawl_missing_urls.py --concurrency 20
+    # Multi-host crawl with adaptive backoff:
+    python scripts/crawl_missing_urls.py --hosts nhathuoclongchau.com.vn suckhoedoisong.vn --concurrency 25
 """
 
 import argparse
@@ -22,15 +27,17 @@ import asyncio
 import json
 import random
 import re
+import sys
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 import pyarrow.parquet as pq
 from loguru import logger
-from tqdm.asyncio import tqdm
+from tqdm import tqdm
 
 from src.crawler.extractors import extract_article_structured
 from src.ingestion.cleaner import detect_language
@@ -40,48 +47,176 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
 ]
 
 
-class AsyncArticleCrawler:
-    """Async crawler with per-domain rate limiting and structured extraction."""
+@dataclass
+class QueueItem:
+    doc_id: int
+    url: str
+    host: str
+    retry_count: int = 0
+    retry_after: float = 0.0
+
+
+class AdaptiveCrawlerManager:
+    """Manages continuous crawling, per-domain cooldowns, and the retry queue."""
 
     def __init__(
         self,
         concurrency: int = 15,
         max_domain_concurrency: int = 3,
+        domain_interval: float = 0.25,
+        cooldown_seconds: float = 45.0,
+        max_retries: int = 3,
         timeout: float = 12.0,
+        shard_size: int = 5000,
         out_dir: Path = Path("data/processed/v2/crawled"),
     ):
         self.concurrency = concurrency
         self.max_domain_concurrency = max_domain_concurrency
+        self.base_domain_interval = domain_interval
+        self.cooldown_seconds = cooldown_seconds
+        self.max_retries = max_retries
         self.timeout = timeout
+        self.shard_size = shard_size
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        self.global_sem = asyncio.Semaphore(concurrency)
+        self.work_queue: asyncio.Queue[QueueItem] = asyncio.Queue()
+        self.retry_list: list[QueueItem] = []
+        self.retry_lock = asyncio.Lock()
+
         self.domain_sems: dict[str, asyncio.Semaphore] = defaultdict(
             lambda: asyncio.Semaphore(max_domain_concurrency)
         )
         self.domain_last_time: dict[str, float] = defaultdict(float)
-        self.domain_interval = 0.35  # seconds minimum between requests to same domain
+        self.domain_cooldown_until: dict[str, float] = defaultdict(float)
+        self.domain_interval: dict[str, float] = defaultdict(lambda: domain_interval)
 
-    async def fetch_one(
-        self,
-        client: httpx.AsyncClient,
-        item: dict,
-    ) -> dict | None:
-        doc_id = item["id"]
-        url = item["url"]
-        host = item["host"]
+        # File handles & stats
+        self.current_shard_file: Path | None = None
+        self.current_shard_fp = None
+        self.shard_count = 0
+        self.file_lock = asyncio.Lock()
 
-        async with self.global_sem:
+        self.failed_file = self.out_dir / "failed_urls.jsonl"
+        self.failed_fp = None
+
+        self.stats = {
+            "success": 0,
+            "failed_perm": 0,
+            "retries_queued": 0,
+            "rate_limits_hit": 0,
+        }
+
+    async def init_files(self):
+        self._rotate_shard()
+        self.failed_fp = open(self.failed_file, "a", encoding="utf-8")
+
+    def _rotate_shard(self):
+        if self.current_shard_fp:
+            try:
+                self.current_shard_fp.close()
+            except Exception:
+                pass
+        self.current_shard_file = self.out_dir / f"crawled_shard_{int(time.time())}.jsonl"
+        self.current_shard_fp = open(self.current_shard_file, "a", encoding="utf-8")
+        self.shard_count = 0
+        logger.info(f"Opened new output shard: {self.current_shard_file.name}")
+
+    async def write_success(self, record: dict):
+        async with self.file_lock:
+            self.current_shard_fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self.current_shard_fp.flush()
+            self.shard_count += 1
+            self.stats["success"] += 1
+            if self.shard_count >= self.shard_size:
+                self._rotate_shard()
+
+    async def write_failure(self, item: QueueItem, reason: str, status_code: int = 0):
+        async with self.file_lock:
+            fail_record = {
+                "doc_id": item.doc_id,
+                "url": item.url,
+                "host": item.host,
+                "status_code": status_code,
+                "reason": reason,
+                "retries": item.retry_count,
+                "timestamp": int(time.time()),
+            }
+            self.failed_fp.write(json.dumps(fail_record, ensure_ascii=False) + "\n")
+            self.failed_fp.flush()
+            self.stats["failed_perm"] += 1
+
+    async def trigger_domain_cooldown(self, host: str, reason: str):
+        now = time.monotonic()
+        cur_until = self.domain_cooldown_until[host]
+        # Debounce: if domain is already in active cooldown, do not stack additively
+        if cur_until > now:
+            return
+        cooldown = self.cooldown_seconds
+        self.domain_cooldown_until[host] = now + cooldown
+        # Temporarily increase request interval for this domain
+        self.domain_interval[host] = min(self.domain_interval[host] * 1.5, 3.0)
+        self.stats["rate_limits_hit"] += 1
+        logger.warning(
+            f"[CircuitBreaker] {host} triggered {reason}! Pausing {host} for {cooldown:.1f}s. "
+            f"(Interval adjusted to {self.domain_interval[host]:.2f}s)"
+        )
+
+    async def schedule_retry(self, item: QueueItem, delay: float, reason: str, count_as_attempt: bool = True) -> bool:
+        """Schedule an item for retry. Returns True if queued, False if permanently failed."""
+        if count_as_attempt:
+            item.retry_count += 1
+            if item.retry_count > self.max_retries:
+                logger.error(f"[MaxRetriesExceeded] ID {item.doc_id} ({item.url}) permanently failed: {reason}")
+                await self.write_failure(item, reason=f"Max retries ({self.max_retries}) exceeded: {reason}")
+                return False
+
+        item.retry_after = time.monotonic() + delay
+        async with self.retry_lock:
+            self.retry_list.append(item)
+            self.stats["retries_queued"] += 1
+        return True
+
+    async def fetch_worker(self, worker_id: int, client: httpx.AsyncClient, pbar: tqdm):
+        while True:
+            item = await self.work_queue.get()
+            if item is None:
+                # Sentinel to terminate worker
+                self.work_queue.task_done()
+                break
+
+            host = item.host
+            url = item.url
+            doc_id = item.doc_id
+
+            # 1. Check if domain is under cooldown
+            now = time.monotonic()
+            if now < self.domain_cooldown_until[host]:
+                cooldown_remaining = self.domain_cooldown_until[host] - now
+                # Re-queue with a delay without exhausting URL retry count
+                await self.schedule_retry(item, delay=cooldown_remaining + 0.5, reason="Domain in cooldown", count_as_attempt=False)
+                self.work_queue.task_done()
+                pbar.set_postfix(
+                    ok=self.stats["success"],
+                    retry=len(self.retry_list),
+                    fail=self.stats["failed_perm"],
+                    bans=self.stats["rate_limits_hit"],
+                )
+                await asyncio.sleep(0.05)
+                continue
+
+            # 2. Acquire domain semaphore and respect pacing
             async with self.domain_sems[host]:
-                # Polite pacing per domain
                 now = time.monotonic()
                 elapsed = now - self.domain_last_time[host]
-                if elapsed < self.domain_interval:
-                    await asyncio.sleep(self.domain_interval - elapsed)
+                interval = self.domain_interval[host]
+                if elapsed < interval:
+                    await asyncio.sleep(interval - elapsed)
                 self.domain_last_time[host] = time.monotonic()
 
                 headers = {
@@ -90,44 +225,116 @@ class AsyncArticleCrawler:
                     "Accept-Language": "vi,zh-CN,zh;q=0.9,en;q=0.8",
                 }
 
-                for attempt in range(2):
-                    try:
-                        r = await client.get(url, headers=headers, follow_redirects=True)
-                        # Auto-solve JS cookie challenges (e.g. laodong.vn D1N cookie)
-                        if "document.cookie=" in r.text and len(r.text) < 500:
-                            m = re.search(r'document\.cookie="([^"]+)"', r.text)
-                            if m:
-                                cookie_str = m.group(1)
-                                k, v = cookie_str.split(";")[0].split("=", 1)
-                                client.cookies.set(k.strip(), v.strip(), domain=host)
-                                r = await client.get(url, headers=headers, follow_redirects=True)
+                try:
+                    r = await client.get(url, headers=headers, follow_redirects=True)
 
-                        if r.status_code == 200 and len(r.content) > 300:
-                            # Extract structured text
-                            extracted = extract_article_structured(r.text, url)
-                            text = extracted.get("text", "")
-                            title = extracted.get("title", "")
-                            if len(text.strip()) >= 50:
-                                lang = detect_language(text)
-                                return {
-                                    "doc_id": doc_id,
-                                    "url": url,
-                                    "title": title,
-                                    "text": text,
-                                    "lang": lang,
-                                    "domain": host,
-                                    "char_count": len(text),
-                                    "status": "success",
-                                }
-                        elif r.status_code == 429:
-                            await asyncio.sleep(2.0 * (attempt + 1))
-                    except Exception:
-                        await asyncio.sleep(0.5)
+                    # Check for Lao Dong JS cookie challenge
+                    if "document.cookie=" in r.text and len(r.text) < 500:
+                        m = re.search(r'document\.cookie="([^"]+)"', r.text)
+                        if m:
+                            cookie_str = m.group(1)
+                            k, v = cookie_str.split(";")[0].split("=", 1)
+                            client.cookies.set(k.strip(), v.strip(), domain=host)
+                            r = await client.get(url, headers=headers, follow_redirects=True)
 
-        return None
+                    if r.status_code == 200 and len(r.content) > 200:
+                        extracted = extract_article_structured(r.text, url)
+                        text = extracted.get("text", "")
+                        title = extracted.get("title", "")
+                        if len(text.strip()) >= 50:
+                            lang = detect_language(text)
+                            record = {
+                                "doc_id": doc_id,
+                                "url": url,
+                                "title": title,
+                                "text": text,
+                                "lang": lang,
+                                "domain": host,
+                                "char_count": len(text),
+                                "status": "success",
+                            }
+                            await self.write_success(record)
+                            pbar.update(1)
+                            # Slightly recover domain interval on repeated success
+                            if self.domain_interval[host] > self.base_domain_interval:
+                                self.domain_interval[host] = max(
+                                    self.base_domain_interval, self.domain_interval[host] * 0.95
+                                )
+                        else:
+                            await self.write_failure(item, reason="Empty text extracted (<50 chars)", status_code=200)
+                            pbar.update(1)
+
+                    elif r.status_code in (429, 403):
+                        # Domain rate limited or Cloudflare blocked!
+                        await self.trigger_domain_cooldown(host, f"HTTP {r.status_code}")
+                        if not await self.schedule_retry(item, delay=self.cooldown_seconds, reason=f"HTTP {r.status_code}"):
+                            pbar.update(1)
+
+                    elif r.status_code in (500, 502, 503, 504):
+                        # Temporary server error: retry in 15 seconds
+                        if not await self.schedule_retry(item, delay=15.0, reason=f"HTTP {r.status_code}"):
+                            pbar.update(1)
+
+                    elif r.status_code in (404, 410):
+                        # Permanent missing page: do not retry
+                        await self.write_failure(item, reason=f"HTTP {r.status_code}", status_code=r.status_code)
+                        pbar.update(1)
+
+                    else:
+                        if not await self.schedule_retry(item, delay=10.0, reason=f"HTTP {r.status_code}"):
+                            pbar.update(1)
+
+                except (httpx.TimeoutException, httpx.ConnectTimeout):
+                    if not await self.schedule_retry(item, delay=10.0, reason="Timeout"):
+                        pbar.update(1)
+                except (httpx.ConnectError, httpx.ReadError) as e:
+                    if not await self.schedule_retry(item, delay=15.0, reason=f"Network error: {type(e).__name__}"):
+                        pbar.update(1)
+                except Exception as e:
+                    if not await self.schedule_retry(item, delay=10.0, reason=f"Exception: {e}"):
+                        pbar.update(1)
+
+            self.work_queue.task_done()
+            pbar.set_postfix(
+                ok=self.stats["success"],
+                retry=len(self.retry_list),
+                fail=self.stats["failed_perm"],
+                bans=self.stats["rate_limits_hit"],
+            )
+
+    async def retry_feeder(self, stop_event: asyncio.Event):
+        """Background task: periodically checks retry_list and re-injects ready items."""
+        while not stop_event.is_set():
+            await asyncio.sleep(2.0)
+            now = time.monotonic()
+            ready_items = []
+            async with self.retry_lock:
+                remaining = []
+                for item in self.retry_list:
+                    if item.retry_after <= now:
+                        ready_items.append(item)
+                    else:
+                        remaining.append(item)
+                self.retry_list = remaining
+
+            for item in ready_items:
+                await self.work_queue.put(item)
+
+    async def close(self):
+        async with self.file_lock:
+            if self.current_shard_fp:
+                try:
+                    self.current_shard_fp.close()
+                except Exception:
+                    pass
+            if self.failed_fp:
+                try:
+                    self.failed_fp.close()
+                except Exception:
+                    pass
 
 
-async def run_crawler(args):
+async def run_adaptive_crawler(args):
     # 1. Load missing URLs
     logger.info(f"Loading missing URLs from {args.missing_file}...")
     tbl = pq.read_table(args.missing_file)
@@ -142,78 +349,93 @@ async def run_crawler(args):
         rows = [r for r in rows if r["host"] in target_hosts]
         logger.info(f"Filtered for hosts {target_hosts}: {len(rows):,} URLs matching target filter.")
 
-    crawler = AsyncArticleCrawler(
+    # 2. Check already crawled IDs and permanently failed IDs
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    crawled_ids = set()
+    for f in args.out_dir.glob("*.jsonl"):
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                for line in fp:
+                    if line.strip():
+                        crawled_ids.add(json.loads(line)["doc_id"])
+        except Exception:
+            pass
+
+    todo = [r for r in rows if r["id"] not in crawled_ids]
+    logger.info(f"Already crawled: {len(crawled_ids):,} | Remaining to crawl: {len(todo):,}")
+
+    if args.limit and args.limit > 0:
+        todo = todo[: args.limit]
+        logger.info(f"Applied --limit {args.limit}: fetching {len(todo)} URLs.")
+
+    if not todo:
+        logger.info("No URLs to crawl! All requested URLs are already crawled.")
+        return
+
+    # 3. Setup Manager and Worker Pool
+    manager = AdaptiveCrawlerManager(
         concurrency=args.concurrency,
         max_domain_concurrency=args.domain_concurrency,
+        domain_interval=args.domain_interval,
+        cooldown_seconds=args.cooldown_seconds,
+        max_retries=args.max_retries,
         timeout=args.timeout,
+        shard_size=args.shard_size,
         out_dir=args.out_dir,
     )
+    await manager.init_files()
 
-    limits = httpx.Limits(max_keepalive_connections=args.concurrency * 2, max_connections=args.concurrency * 3)
+    # Feed initial URLs to queue
+    for r in todo:
+        await manager.work_queue.put(QueueItem(doc_id=r["id"], url=r["url"], host=r["host"]))
+
+    total_tasks = len(todo)
+    pbar = tqdm(total=total_tasks, desc="Crawling", unit="url", dynamic_ncols=True)
+
+    limits = httpx.Limits(
+        max_keepalive_connections=args.concurrency * 2,
+        max_connections=args.concurrency * 3,
+    )
     timeout = httpx.Timeout(args.timeout)
 
-    iteration = 0
-    while True:
-        iteration += 1
+    stop_retry_event = asyncio.Event()
+    feeder_task = asyncio.create_task(manager.retry_feeder(stop_retry_event))
 
-        # 2. Check already crawled IDs for resuming
-        args.out_dir.mkdir(parents=True, exist_ok=True)
-        crawled_ids = set()
-        for f in args.out_dir.glob("*.jsonl"):
-            try:
-                with open(f, "r", encoding="utf-8") as fp:
-                    for line in fp:
-                        if line.strip():
-                            crawled_ids.add(json.loads(line)["doc_id"])
-            except Exception:
-                pass
+    async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
+        workers = [
+            asyncio.create_task(manager.fetch_worker(i, client, pbar))
+            for i in range(args.concurrency)
+        ]
 
-        todo = [r for r in rows if r["id"] not in crawled_ids]
-        logger.info(
-            f"[Batch {iteration}] Already crawled: {len(crawled_ids):,} | Remaining to crawl: {len(todo):,}"
-        )
+        # Wait until initial work queue is empty
+        await manager.work_queue.join()
 
-        if not todo:
-            logger.info("All target URLs have been crawled! Done.")
-            break
+        # Wait for any in-flight retries to be resolved
+        while True:
+            async with manager.retry_lock:
+                active_retries = len(manager.retry_list)
+            if active_retries == 0 and manager.work_queue.empty():
+                break
+            await asyncio.sleep(1.0)
+            await manager.work_queue.join()
 
-        batch_todo = todo[: args.limit] if args.limit and args.limit > 0 else todo
-        logger.info(f"[Batch {iteration}] Crawling next {len(batch_todo):,} URLs...")
+        # Stop workers
+        for _ in range(args.concurrency):
+            await manager.work_queue.put(None)
+        await asyncio.gather(*workers)
 
-        out_file = args.out_dir / f"crawled_shard_{int(time.time())}.jsonl"
-        success_count = 0
-        fail_count = 0
+    stop_retry_event.set()
+    await feeder_task
+    await manager.close()
+    pbar.close()
 
-        with open(out_file, "a", encoding="utf-8") as fp:
-            async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
-                tasks = [crawler.fetch_one(client, item) for item in batch_todo]
-                for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc=f"Batch {iteration}"):
-                    res = await coro
-                    if res:
-                        fp.write(json.dumps(res, ensure_ascii=False) + "\n")
-                        fp.flush()
-                        success_count += 1
-                    else:
-                        fail_count += 1
-
-        logger.info(
-            f"[Batch {iteration}] Finished: Success={success_count:,}, Failed={fail_count:,} -> {out_file.name}"
-        )
-
-        if args.interval_minutes <= 0:
-            break
-
-        remaining = len(todo) - success_count
-        if remaining <= 0:
-            logger.info("All URLs finished. Exiting scheduling loop.")
-            break
-
-        sleep_secs = int(args.interval_minutes * 60)
-        logger.info(
-            f"Scheduled pause: Sleeping for {args.interval_minutes:.1f} minutes ({sleep_secs}s) to prevent domain ban. "
-            f"Remaining: {remaining:,} URLs. Next batch resumes automatically..."
-        )
-        await asyncio.sleep(sleep_secs)
+    logger.info("=" * 60)
+    logger.info(f"Crawl Completed Successfully!")
+    logger.info(f" - Saved Articles:       {manager.stats['success']:,}")
+    logger.info(f" - Permanent Failures:   {manager.stats['failed_perm']:,} (logged in failed_urls.jsonl)")
+    logger.info(f" - Total Retries Queued: {manager.stats['retries_queued']:,}")
+    logger.info(f" - Rate Limit Pauses:    {manager.stats['rate_limits_hit']:,}")
+    logger.info("=" * 60)
 
 
 def main():
@@ -222,7 +444,7 @@ def main():
         "--missing-file",
         type=Path,
         default=Path("data/processed/v2/missing_urls.parquet"),
-        help="Path to missing_urls.parquet generated by audit_coverage.py",
+        help="Path to missing_urls.parquet.",
     )
     parser.add_argument(
         "--out-dir",
@@ -240,35 +462,53 @@ def main():
         "--limit",
         type=int,
         default=0,
-        help="Max URLs to fetch per batch (0 for all).",
+        help="Max URLs to fetch (0 for all remaining URLs).",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=15,
-        help="Global HTTP request concurrency.",
+        default=20,
+        help="Total concurrent HTTP requests across all domains (default: 20).",
     )
     parser.add_argument(
         "--domain-concurrency",
         type=int,
-        default=2,
-        help="Max concurrency per domain.",
+        default=3,
+        help="Max concurrent connections per individual domain (default: 3).",
+    )
+    parser.add_argument(
+        "--domain-interval",
+        type=float,
+        default=0.25,
+        help="Base interval between requests to the same domain in seconds (default: 0.25s).",
+    )
+    parser.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        default=45.0,
+        help="Cooldown duration when a domain returns 429/403 (default: 45s).",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum retries for failed/banned URLs before marking permanent failure (default: 3).",
     )
     parser.add_argument(
         "--timeout",
         type=float,
         default=12.0,
-        help="HTTP request timeout in seconds.",
+        help="HTTP request timeout in seconds (default: 12s).",
     )
     parser.add_argument(
-        "--interval-minutes",
-        type=float,
-        default=0.0,
-        help="Interval in minutes between successive crawl batches (e.g. 8 for 8 mins). Default 0 (single run).",
+        "--shard-size",
+        type=int,
+        default=5000,
+        help="Number of articles per JSONL shard file before rotating (default: 5000).",
     )
 
     args = parser.parse_args()
-    asyncio.run(run_crawler(args))
+    asyncio.run(run_adaptive_crawler(args))
 
 
 if __name__ == "__main__":

@@ -25,12 +25,14 @@ case "$1" in
             exit 0
         fi
 
-        echo "Starting scheduled crawler for nhathuoclongchau.com.vn (100 URLs every 8 minutes)..."
+        echo "Starting continuous adaptive crawler for nhathuoclongchau.com.vn..."
         nohup "$PYTHON_BIN" scripts/crawl_missing_urls.py \
             --hosts nhathuoclongchau.com.vn \
-            --limit 100 \
             --concurrency 10 \
-            --interval-minutes 8 \
+            --domain-concurrency 2 \
+            --domain-interval 0.5 \
+            --cooldown-seconds 60 \
+            --max-retries 3 \
             >> "$LOG_FILE" 2>&1 &
 
         echo $! > "$PID_FILE"

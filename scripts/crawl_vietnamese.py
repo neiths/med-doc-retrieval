@@ -94,10 +94,28 @@ def main():
         help="Max concurrency per domain (default: 2).",
     )
     parser.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        default=45.0,
+        help="Circuit-breaker pause duration when a domain triggers 429/403 (default: 45s).",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max retries before marking an article permanently failed (default: 3).",
+    )
+    parser.add_argument(
+        "--shard-size",
+        type=int,
+        default=5000,
+        help="Number of articles per JSONL output file before rotating (default: 5000).",
+    )
+    parser.add_argument(
         "--interval-minutes",
         type=float,
         default=0.0,
-        help="Pause interval in minutes between batches (e.g. 5 or 8). 0 for single batch.",
+        help="[Deprecated] Translate to domain cooldown seconds if specified.",
     )
     parser.add_argument(
         "--out-dir",
@@ -115,6 +133,10 @@ def main():
     else:
         target_hosts = GROUPS[args.group]
 
+    cooldown = args.cooldown_seconds
+    if args.interval_minutes > 0:
+        cooldown = args.interval_minutes * 60.0
+
     print(f"=== Crawling Vietnamese Group: '{args.group}' ===")
     print(f"Target hosts ({len(target_hosts)}): {', '.join(target_hosts)}")
 
@@ -124,13 +146,14 @@ def main():
         "--hosts", *target_hosts,
         "--concurrency", str(args.concurrency),
         "--domain-concurrency", str(args.domain_concurrency),
+        "--cooldown-seconds", str(cooldown),
+        "--max-retries", str(args.max_retries),
+        "--shard-size", str(args.shard_size),
         "--out-dir", str(args.out_dir),
     ]
 
     if args.limit > 0:
         cmd.extend(["--limit", str(args.limit)])
-    if args.interval_minutes > 0:
-        cmd.extend(["--interval-minutes", str(args.interval_minutes)])
 
     # Forward execution to crawl_missing_urls.py
     sys.exit(subprocess.run(cmd).returncode)
