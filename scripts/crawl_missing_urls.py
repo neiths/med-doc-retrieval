@@ -29,7 +29,7 @@ import random
 import re
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -41,6 +41,29 @@ from tqdm import tqdm
 
 from src.crawler.extractors import extract_article_structured
 from src.ingestion.cleaner import detect_language
+
+
+def interleave_by_host(items: list) -> list:
+    """Interleaves queue items across domains in round-robin fashion.
+    
+    Prevents single-domain semaphore contention and distributes network load
+    evenly across all target servers.
+    """
+    domain_buckets = defaultdict(deque)
+    for it in items:
+        domain_buckets[it.host].append(it)
+
+    interleaved = []
+    active_keys = list(domain_buckets.keys())
+    while active_keys:
+        next_active = []
+        for d in active_keys:
+            q = domain_buckets[d]
+            interleaved.append(q.popleft())
+            if q:
+                next_active.append(d)
+        active_keys = next_active
+    return interleaved
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -238,7 +261,15 @@ class AdaptiveCrawlerManager:
                             r = await client.get(url, headers=headers, follow_redirects=True)
 
                     if r.status_code == 200 and len(r.content) > 200:
-                        extracted = extract_article_structured(r.text, url)
+                        raw_html = r.text
+                        ct = r.headers.get("content-type", "").lower()
+                        if "charset=gb" in ct or "gbk" in raw_html[:1000].lower() or "gb2312" in raw_html[:1000].lower():
+                            try:
+                                raw_html = r.content.decode("gb18030", errors="ignore")
+                            except Exception:
+                                pass
+
+                        extracted = extract_article_structured(raw_html, url) or {}
                         text = extracted.get("text", "")
                         title = extracted.get("title", "")
                         if len(text.strip()) >= 50:
@@ -349,6 +380,11 @@ async def run_adaptive_crawler(args):
         rows = [r for r in rows if r["host"] in target_hosts]
         logger.info(f"Filtered for hosts {target_hosts}: {len(rows):,} URLs matching target filter.")
 
+    if getattr(args, "exclude_hosts", None):
+        ex_hosts = set(args.exclude_hosts)
+        rows = [r for r in rows if r["host"] not in ex_hosts]
+        logger.info(f"Excluded hosts {ex_hosts}: {len(rows):,} URLs remaining.")
+
     # 2. Check already crawled IDs and permanently failed IDs
     args.out_dir.mkdir(parents=True, exist_ok=True)
     crawled_ids = set()
@@ -385,9 +421,13 @@ async def run_adaptive_crawler(args):
     )
     await manager.init_files()
 
-    # Feed initial URLs to queue
-    for r in todo:
-        await manager.work_queue.put(QueueItem(doc_id=r["id"], url=r["url"], host=r["host"]))
+    # Feed initial URLs to queue (interleaved across domains for maximum concurrency and politeness)
+    queue_items = [QueueItem(doc_id=r["id"], url=r["url"], host=r["host"]) for r in todo]
+    if getattr(args, "interleave", True):
+        queue_items = interleave_by_host(queue_items)
+
+    for it in queue_items:
+        await manager.work_queue.put(it)
 
     total_tasks = len(todo)
     pbar = tqdm(total=total_tasks, desc="Crawling", unit="url", dynamic_ncols=True)
@@ -457,6 +497,18 @@ def main():
         nargs="+",
         default=None,
         help="List of specific hosts to crawl (e.g. nhathuoclongchau.com.vn suckhoedoisong.vn).",
+    )
+    parser.add_argument(
+        "--exclude-hosts",
+        nargs="+",
+        default=None,
+        help="List of hosts to exclude from crawl (e.g. nhathuoclongchau.com.vn).",
+    )
+    parser.add_argument(
+        "--interleave",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Interleave URLs across domains in round-robin fashion for maximum throughput (default: True).",
     )
     parser.add_argument(
         "--limit",

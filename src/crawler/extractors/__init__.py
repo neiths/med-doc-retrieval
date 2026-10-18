@@ -34,6 +34,8 @@ _DISEASE_DOMAINS = {
     "zhongyibaodian.net",
     "zysjonline.com",
     "a-hospital.com",
+    "bachmai.gov.vn",
+    "tiemchunglongchau.com.vn",
 }
 
 _NEWS_DOMAINS = {
@@ -49,6 +51,8 @@ _NEWS_DOMAINS = {
     "tuoitre.vn",
     "vov.vn",
     "nhandan.vn",
+    "phunusuckhoe.giadinhonline.vn",
+    "giadinhonline.vn",
 }
 
 

@@ -13,8 +13,8 @@ BOILERPLATE_PATTERNS = [
     r"^.*(扫描二维码|手机浏览|用手机扫描|关注微信公众号|相关推荐|没有更多了|免责声明|以上内容仅供参考|目前暂无留言|添加留言|订阅讨论RSS|关于“.*”的留言).*$",
     r"^.*(A\+医学百科 >>|查看全文|目录|手机版|返回顶部).*$",
     r"^.*(血液内科医生推荐|内科医生推荐|儿科医生推荐|妇科医生推荐|医生建议仅供参考).*$",
-    # Markdown table borders and separator artifacts
-    r"^\s*\|.*\|\s*$",
+    # Markdown table borders and separator artifacts (only dashes/colons, not content rows)
+    r"^\s*\|[\s\-:|]+\|\s*$",
     r"^\s*[-=_]{3,}\s*$",
 ]
 
