@@ -45,6 +45,64 @@ STOPWORDS_MEDICAL = {
 }
 
 
+CLINICAL_CHAPTER_KEYWORDS = {
+    "(XI) K00-K93: Bệnh hệ tiêu hóa": [
+        "dạ dày", "thực quản", "tá tràng", "đại tràng", "tiêu hóa", "răng", "nướu", "nha chu",
+        "gan", "men gan", "mật", "túi mật", "ruột", "trĩ", "táo bón", "viêm ruột", "nôn", "buồn nôn",
+        "ợ chua", "trào ngược", "xung huyết", "loét", "hành tá tràng", "chảy máu chân răng",
+    ],
+    "(X) J00-J99: Bệnh hệ hô hấp": [
+        "phổi", "hô hấp", "phế quản", "viêm phổi", "viêm phế quản", "hen suyễn", "bị ho", "ho khan", "ho có đờm", "họng",
+        "viêm họng", "amidan", "xoang", "viêm xoang", "sổ mũi", "ngạt mũi", "khó thở", "đờm",
+    ],
+    "(IX) I00-I99: Bệnh hệ tuần hoàn": [
+        "tim", "huyết áp", "tăng huyết áp", "đột quỵ", "tai biến", "mạch vành", "thiếu máu cơ tim",
+        "nhồi máu", "suy tim", "xơ vữa", "rối loạn nhịp tim", "mạch máu",
+    ],
+    "(XIV) N00-N99: Bệnh hệ tiết niệu, sinh dục": [
+        "thận", "suy thận", "sỏi thận", "tiết niệu", "bàng quang", "tiểu buốt", "tiểu rắt",
+        "phụ khoa", "tử cung", "buồng trứng", "kinh nguyệt", "tinh hoàn", "tiền liệt tuyến", "bao quy đầu",
+    ],
+    "(XIII) M00-M99: Bệnh hệ cơ, xương, khớp": [
+        "xương", "khớp", "cột sống", "thoái hóa", "thoát vị", "đĩa đệm", "đau lưng", "gãy xương",
+        "gout", "viêm khớp", "loãng xương", "đau vai gáy", "đau cơ", "cơ bắp", "gân",
+    ],
+    "(XII) L00-L99: Bệnh của da và mô dưới da": [
+        "ngứa", "mề đay", "mụn", "vảy nến", "chàm", "dị ứng da", "viêm da", "zona",
+        "ghẻ", "nấm da", "sẹo lồi", "nổi mẩn",
+    ],
+    "(IV) E00-E90: Bệnh nội tiết, dinh dưỡng và chuyển hóa": [
+        "tiểu đường", "đái tháo đường", "tuyến giáp", "bướu cổ", "mỡ máu", "cholesterol",
+        "axit uric", "béo phì", "suy dinh dưỡng", "hạ đường huyết", "rối loạn chuyển hóa",
+    ],
+    "(II) C00-D48: Khối u / Ung thư": [
+        "ung thư", "u ác tính", "u lành", "khối u", "carcinoma", "sarcoma", "polyp", "hạch", "di căn",
+    ],
+    "(VI) G00-G99: Bệnh hệ thần kinh": [
+        "não", "thần kinh", "đau đầu", "chóng mặt", "mất ngủ", "động kinh", "liệt", "parkinson",
+        "viêm màng não", "dây thần kinh",
+    ],
+    "(VII) H00-H59: Bệnh của mắt và phần phụ": [
+        "mắt", "thị lực", "cận thị", "viêm kết mạc", "đau mắt", "giác mạc", "đục thủy tinh thể",
+    ],
+    "(VIII) H60-H95: Bệnh của tai và xương chũm": [
+        "tai", "thính lực", "ù tai", "viêm tai", "chảy mủ tai", "nghe kém",
+    ],
+    "(V) F00-F99: Rối loạn tâm thần và hành vi": [
+        "trầm cảm", "lo âu", "stress", "tâm thần", "hoang tưởng", "rối loạn cảm xúc", "ảo giác",
+    ],
+    "(XV) O00-O99: Thai nghén, sinh đẻ và hậu sản": [
+        "mang thai", "có bầu", "sinh con", "thai nhi", "sau sinh", "sảy thai", "tiền sản giật",
+    ],
+    "(XVIII) R00-R99: Triệu chứng, dấu hiệu và kết quả lâm sàng": [
+        "kết quả", "xét nghiệm", "chỉ số", "beta-hcg", "scc", "siêu âm", "sinh thiết", "chụp x-quang", "chụp ct",
+    ],
+    "(I) A00-B99: Bệnh nhiễm trùng và ký sinh trùng": [
+        "bệnh lao", "kháng thuốc", "hiv", "viêm gan b", "viêm gan c", "sốt xuất huyết", "covid", "cúm", "giun", "sán", "nhiễm trùng",
+    ],
+}
+
+
 class ICD10Tagger:
     """Fast multilingual entity matcher and chapter classifier using WHO ICD-10."""
 
@@ -246,6 +304,15 @@ class ICD10Tagger:
         # Main text get 1x weight
         scan_text(body_sample, weight=1)
 
+        # If exact ontology did not match, fallback to clinical keywords
+        if not chapter_scores:
+            combined_txt = f"{title_norm} {body_sample}"
+            for chap, kws in CLINICAL_CHAPTER_KEYWORDS.items():
+                for kw in kws:
+                    if kw in combined_txt:
+                        chapter_scores[chap] += 2
+                        matched_terms.add(kw)
+
         if not chapter_scores:
             return ICD10TagResult()
 
@@ -260,3 +327,6 @@ class ICD10Tagger:
             matched_codes=sorted(list(matched_codes))[:10],
             matched_terms=sorted(list(matched_terms))[:15],
         )
+
+    # Alias for convenience
+    tag = tag_document
