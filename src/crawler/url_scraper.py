@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 import time
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,20 @@ import trafilatura
 from bs4 import BeautifulSoup
 from loguru import logger
 from tqdm.asyncio import tqdm
+
+
+def normalize_target_url(url: str) -> str:
+    """Applies official organizer URL migrations.
+    
+    BTC Announcement:
+    https://pmc-ecm-healthblog.beta.pharmacity.io/<slug>/ -> https://www.pharmacity.vn/<slug>.htm
+    """
+    if "pmc-ecm-healthblog.beta.pharmacity.io" in url:
+        m = re.match(r"https?://pmc-ecm-healthblog\.beta\.pharmacity\.io/([^/?#]+)/?", url)
+        if m:
+            slug = m.group(1).rstrip("/")
+            return f"https://www.pharmacity.vn/{slug}.htm"
+    return url
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -52,9 +67,10 @@ class ArticleScraper:
 
     async def fetch_url(self, client: httpx.AsyncClient, url: str) -> str | None:
         """Fetch raw HTML with per-domain rate limiting, retry logic, and cooldown backoff."""
+        target_url = normalize_target_url(url)
         domain = "other"
         try:
-            domain = urlparse(url).netloc.lower() or "other"
+            domain = urlparse(target_url).netloc.lower() or "other"
         except Exception:
             pass
 
@@ -78,7 +94,7 @@ class ArticleScraper:
 
             for attempt in range(1, self.max_retries + 1):
                 try:
-                    response = await client.get(url, headers=req_headers, follow_redirects=True)
+                    response = await client.get(target_url, headers=req_headers, follow_redirects=True)
                     if response.status_code == 200:
                         content_bytes = response.content
                         lower_head = content_bytes[:2048].lower()

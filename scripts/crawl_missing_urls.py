@@ -75,11 +75,26 @@ USER_AGENTS = [
 ]
 
 
+def normalize_target_url(url: str) -> str:
+    """Applies official organizer URL migrations.
+    
+    BTC Announcement:
+    https://pmc-ecm-healthblog.beta.pharmacity.io/<slug>/ -> https://www.pharmacity.vn/<slug>.htm
+    """
+    if "pmc-ecm-healthblog.beta.pharmacity.io" in url:
+        m = re.match(r"https?://pmc-ecm-healthblog\.beta\.pharmacity\.io/([^/?#]+)/?", url)
+        if m:
+            slug = m.group(1).rstrip("/")
+            return f"https://www.pharmacity.vn/{slug}.htm"
+    return url
+
+
 @dataclass
 class QueueItem:
     doc_id: int
     url: str
     host: str
+    fetch_url: str = ""
     retry_count: int = 0
     retry_after: float = 0.0
 
@@ -249,7 +264,8 @@ class AdaptiveCrawlerManager:
                 }
 
                 try:
-                    r = await client.get(url, headers=headers, follow_redirects=True)
+                    target_url = item.fetch_url or normalize_target_url(url)
+                    r = await client.get(target_url, headers=headers, follow_redirects=True)
 
                     # Check for Lao Dong JS cookie challenge
                     if "document.cookie=" in r.text and len(r.text) < 500:
@@ -422,7 +438,11 @@ async def run_adaptive_crawler(args):
     await manager.init_files()
 
     # Feed initial URLs to queue (interleaved across domains for maximum concurrency and politeness)
-    queue_items = [QueueItem(doc_id=r["id"], url=r["url"], host=r["host"]) for r in todo]
+    queue_items = []
+    for r in todo:
+        fetch_u = normalize_target_url(r["url"])
+        fetch_h = urlparse(fetch_u).netloc or r["host"]
+        queue_items.append(QueueItem(doc_id=r["id"], url=r["url"], host=fetch_h, fetch_url=fetch_u))
     if getattr(args, "interleave", True):
         queue_items = interleave_by_host(queue_items)
 
