@@ -255,6 +255,23 @@ def main():
     logger.info(f"  TOTAL CORPUS NOW:             {len(seen_ids):,} unique articles")
     logger.info("=" * 60)
 
+    # Update scraped_ids artifacts if new articles were added
+    if stats["new_valid_kept"] > 0:
+        processed_dir = Path("data/processed")
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        sorted_ids = sorted(seen_ids)
+
+        scraped_ids_pq = processed_dir / "scraped_ids.parquet"
+        id_table = pa.Table.from_arrays([pa.array(sorted_ids, type=pa.int64())], names=["doc_id"])
+        pq.write_table(id_table, scraped_ids_pq, compression="zstd")
+        logger.info(f"Updated {scraped_ids_pq} with {len(sorted_ids):,} IDs ({scraped_ids_pq.stat().st_size / (1024*1024):.2f} MB)")
+
+        scraped_ids_txt = processed_dir / "scraped_ids.txt"
+        with open(scraped_ids_txt, "w", encoding="utf-8") as f:
+            for did in sorted_ids:
+                f.write(f"{did}\n")
+        logger.info(f"Updated {scraped_ids_txt} with {len(sorted_ids):,} IDs ({scraped_ids_txt.stat().st_size / (1024*1024):.2f} MB)")
+
     if args.sync_to_bucket and created_files:
         hf_bin = shutil.which("hf") or "hf"
         token = load_hf_token()
@@ -264,9 +281,15 @@ def main():
         logger.info(f"Syncing updated corpus to {args.bucket_uri} ...")
         res = subprocess.run([hf_bin, "sync", str(args.corpus_dir), args.bucket_uri], env=env)
         if res.returncode == 0:
-            logger.info("Hugging Face Bucket sync completed successfully!")
+            logger.info("Hugging Face Bucket corpus sync completed successfully!")
         else:
-            logger.error("Hugging Face Bucket sync failed. Please check credentials.")
+            logger.error("Hugging Face Bucket corpus sync failed. Please check credentials.")
+
+        if stats["new_valid_kept"] > 0:
+            logger.info("Syncing updated scraped_ids filter to Hugging Face Bucket...")
+            subprocess.run([hf_bin, "buckets", "cp", str(scraped_ids_pq), "hf://buckets/nieths/ViBioMIR/scraped_ids.parquet"], env=env)
+            subprocess.run([hf_bin, "buckets", "cp", str(scraped_ids_txt), "hf://buckets/nieths/ViBioMIR/scraped_ids.txt"], env=env)
+            logger.info("Hugging Face Bucket filter sync completed successfully!")
 
 
 if __name__ == "__main__":
