@@ -127,6 +127,8 @@ class DocumentChunker:
         text: str,
         metadata: dict[str, Any] | None = None,
         lang: str | None = None,
+        title: str | None = None,
+        **kwargs: Any,
     ) -> list[DocumentChunk]:
         """Chunks a document text into DocumentChunk instances with exact slice tracking.
 
@@ -137,7 +139,11 @@ class DocumentChunker:
             return []
 
         doc_lang = lang or detect_language(cleaned_text)
-        meta = metadata or {}
+        meta = dict(metadata or {})
+        if title and "title" not in meta:
+            meta["title"] = title
+        if kwargs:
+            meta.update(kwargs)
 
         # If text is already shorter than max_chunk_size, return it as a single chunk
         if len(cleaned_text) <= self.max_chunk_size:
