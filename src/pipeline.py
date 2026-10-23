@@ -227,16 +227,25 @@ class MedicalRetrievalPipeline:
 
         logger.info("Indices successfully built, persisted, and initialized in memory.")
 
-    def load_indices(self, indices_dir: str | Path = "data/indices"):
-        """Loads FAISS and BM25 indices from disk (fallback when engine == 'faiss')."""
+    def load_indices(
+        self,
+        indices_dir: str | Path = "data/indices",
+        dense_dir: str | Path | None = None,
+        sparse_dir: str | Path | None = None,
+    ):
+        """Loads FAISS and BM25 indices from disk (supports separate paths for dense and sparse)."""
         idx_dir = Path(indices_dir)
+        d_dir = Path(dense_dir) if dense_dir else idx_dir
+        s_dir = Path(sparse_dir) if sparse_dir else idx_dir
+
+        logger.info(f"Loading indices: Dense path='{d_dir}' | Sparse (BM25) path='{s_dir}'")
         try:
-            self.dense_index = DenseIndex.load(idx_dir)
+            self.dense_index = DenseIndex.load(d_dir, fallback_meta_dir=s_dir)
         except Exception as e:
             logger.warning(f"Could not load DenseIndex: {e}")
 
         try:
-            self.sparse_index = SparseIndex.load(idx_dir)
+            self.sparse_index = SparseIndex.load(s_dir)
             if self.dense_index is not None and self.sparse_index is not None:
                 self.hybrid_retriever = HybridRetriever(
                     dense_index=self.dense_index,

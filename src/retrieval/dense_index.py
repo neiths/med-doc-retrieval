@@ -133,39 +133,65 @@ class DenseIndex:
         logger.info(f"Saved FAISS index ({self.index.ntotal} items) to {save_dir}")
 
     @classmethod
-    def load(cls, directory: Path | str) -> "DenseIndex":
-        """Loads FAISS index and metadata from disk using zero-RAM memory mapping and SQLite."""
+    def load(cls, directory: Path | str, fallback_meta_dir: Path | str | None = None) -> "DenseIndex":
+        """Loads FAISS index and metadata from disk using zero-RAM memory mapping and SQLite.
+        
+        Supports separate directory/file for FAISS index and fallback metadata directory.
+        """
         import sqlite3
 
-        load_dir = Path(directory)
-        faiss_candidates = [
-            load_dir / "dense_index_sq8.faiss",
-            load_dir / "dense_index.faiss",
-        ]
-        faiss_file = None
-        for fc in faiss_candidates:
-            if fc.exists():
-                faiss_file = fc
-                break
-        if faiss_file is None:
-            all_faiss = list(load_dir.glob("*.faiss"))
-            if all_faiss:
-                faiss_file = all_faiss[0]
-            else:
-                faiss_file = load_dir / "dense_index.faiss"
+        load_path = Path(directory)
+        if load_path.is_file():
+            faiss_file = load_path
+            load_dir = load_path.parent
+        else:
+            load_dir = load_path
+            faiss_candidates = [
+                load_dir / "dense_index_sq8.faiss",
+                load_dir / "dense_index.faiss",
+            ]
+            faiss_file = None
+            for fc in faiss_candidates:
+                if fc.exists():
+                    faiss_file = fc
+                    break
+            if faiss_file is None:
+                all_faiss = list(load_dir.glob("*.faiss"))
+                if all_faiss:
+                    faiss_file = all_faiss[0]
+                else:
+                    faiss_file = load_dir / "dense_index.faiss"
 
         sqlite_file = (
             load_dir / "chunks_meta_slim.sqlite"
             if (load_dir / "chunks_meta_slim.sqlite").exists()
             else (load_dir / "chunks_meta.sqlite")
         )
+        if not sqlite_file.exists() and fallback_meta_dir:
+            fb = Path(fallback_meta_dir)
+            if (fb / "chunks_meta_slim.sqlite").exists():
+                sqlite_file = fb / "chunks_meta_slim.sqlite"
+            elif (fb / "chunks_meta.sqlite").exists():
+                sqlite_file = fb / "chunks_meta.sqlite"
+
         meta_file = (
             load_dir / "dense_metadata_sq8.json"
             if (load_dir / "dense_metadata_sq8.json").exists()
             else (load_dir / "dense_metadata.json")
         )
+        if not meta_file.exists() and fallback_meta_dir:
+            fb = Path(fallback_meta_dir)
+            if (fb / "dense_metadata_sq8.json").exists():
+                meta_file = fb / "dense_metadata_sq8.json"
+            elif (fb / "dense_metadata.json").exists():
+                meta_file = fb / "dense_metadata.json"
+
         chunks_jsonl = Path("data/processed/chunks.jsonl")
         parquet_chunks = load_dir / "chunks_meta.parquet"
+        if not parquet_chunks.exists() and fallback_meta_dir:
+            fb = Path(fallback_meta_dir)
+            if (fb / "chunks_meta.parquet").exists():
+                parquet_chunks = fb / "chunks_meta.parquet"
 
         idx = cls(dimension=1024)
         try:

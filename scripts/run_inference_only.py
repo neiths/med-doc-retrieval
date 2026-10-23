@@ -56,7 +56,19 @@ def main():
         "--indices-dir",
         type=Path,
         default=Path("data/indices"),
-        help="Directory containing dense_index.faiss and bm25s_index.",
+        help="Default fallback directory containing indices.",
+    )
+    parser.add_argument(
+        "--dense-dir",
+        type=Path,
+        default=None,
+        help="Custom path to dense FAISS index directory or .faiss file (e.g. from Kaggle dataset /kaggle/input/...). Defaults to --indices-dir.",
+    )
+    parser.add_argument(
+        "--sparse-dir",
+        type=Path,
+        default=None,
+        help="Custom path to sparse BM25 index directory (e.g. data/indices). Defaults to --indices-dir.",
     )
     parser.add_argument(
         "--queries",
@@ -141,31 +153,41 @@ def main():
     pipeline = MedicalRetrievalPipeline(config=config)
 
     indices_dir = args.indices_dir
+    dense_path = args.dense_dir if args.dense_dir is not None else indices_dir
+    sparse_path = args.sparse_dir if args.sparse_dir is not None else indices_dir
+
     dense_file = None
+    dense_dir = None
 
-    # Check candidates in indices_dir
-    for candidate in [
-        indices_dir / "dense_index_sq8.faiss",
-        indices_dir / "dense_index.faiss",
-    ]:
-        if candidate.exists():
-            dense_file = candidate
-            break
+    # 1. If dense_path is a direct file
+    if dense_path.is_file():
+        dense_file = dense_path
+        dense_dir = dense_path.parent
+    else:
+        dense_dir = dense_path
+        # Check candidates in dense_dir
+        for candidate in [
+            dense_dir / "dense_index_sq8.faiss",
+            dense_dir / "dense_index.faiss",
+        ]:
+            if candidate.exists():
+                dense_file = candidate
+                break
 
+        if dense_file is None:
+            faiss_matches = list(dense_dir.glob("*.faiss")) if dense_dir.exists() else []
+            if faiss_matches:
+                dense_file = faiss_matches[0]
+            elif Path("/kaggle/input").exists():
+                k_faiss = list(Path("/kaggle/input").rglob("*.faiss"))
+                if k_faiss:
+                    dense_file = k_faiss[0]
+                    dense_dir = dense_file.parent
+                    logger.info(f"Auto-detected FAISS index in Kaggle input: {dense_file}")
+
+    # If still not found, try auto-downloading lightweight SQ8 index from HF Bucket into dense_dir
     if dense_file is None:
-        faiss_matches = list(indices_dir.glob("*.faiss")) if indices_dir.exists() else []
-        if faiss_matches:
-            dense_file = faiss_matches[0]
-        elif Path("/kaggle/input").exists():
-            k_faiss = list(Path("/kaggle/input").rglob("*.faiss"))
-            if k_faiss:
-                dense_file = k_faiss[0]
-                indices_dir = dense_file.parent
-                logger.info(f"Auto-detected FAISS index in Kaggle input: {dense_file}")
-
-    # If still not found, try auto-downloading lightweight SQ8 index from HF Bucket
-    if dense_file is None:
-        logger.info(f"FAISS index not found in {indices_dir}. Checking for HF_TOKEN to auto-download from HF Bucket...")
+        logger.info(f"FAISS index not found in {dense_dir}. Checking for HF_TOKEN to auto-download from HF Bucket...")
         hf_token = os.environ.get("HF_TOKEN")
         if not hf_token:
             try:
@@ -178,11 +200,11 @@ def main():
             try:
                 from huggingface_hub import HfApi
                 api = HfApi(token=hf_token)
-                indices_dir.mkdir(parents=True, exist_ok=True)
+                dense_dir.mkdir(parents=True, exist_ok=True)
                 download_files = [
-                    ("indices/dense_index_sq8.faiss", str(indices_dir / "dense_index_sq8.faiss")),
-                    ("indices/chunks_meta_slim.sqlite", str(indices_dir / "chunks_meta_slim.sqlite")),
-                    ("indices/dense_metadata_sq8.json", str(indices_dir / "dense_metadata_sq8.json")),
+                    ("indices/dense_index_sq8.faiss", str(dense_dir / "dense_index_sq8.faiss")),
+                    ("indices/chunks_meta_slim.sqlite", str(dense_dir / "chunks_meta_slim.sqlite")),
+                    ("indices/dense_metadata_sq8.json", str(dense_dir / "dense_metadata_sq8.json")),
                 ]
                 logger.info("📥 Auto-downloading lightweight SQ8 index + slim SQLite (~4.9 GB) from HF Bucket 'nieths/ViBioMIR'...")
                 api.download_bucket_files(
@@ -190,22 +212,29 @@ def main():
                     files=download_files,
                     token=hf_token,
                 )
-                if (indices_dir / "dense_index_sq8.faiss").exists():
-                    dense_file = indices_dir / "dense_index_sq8.faiss"
+                if (dense_dir / "dense_index_sq8.faiss").exists():
+                    dense_file = dense_dir / "dense_index_sq8.faiss"
                     logger.info("✅ Successfully downloaded SQ8 index from Hugging Face Bucket!")
             except Exception as e:
                 logger.warning(f"Could not auto-download from HF Bucket: {e}")
 
     if dense_file is None or not dense_file.exists():
         raise FileNotFoundError(
-            f"❌ Không tìm thấy file FAISS index (*.faiss) trong '{indices_dir}'!\n"
+            f"❌ Không tìm thấy file FAISS index (*.faiss) trong '{dense_dir}'!\n"
             f"👉 Cách khắc phục:\n"
-            f"1. Hãy đảm bảo bạn đã chạy cell tải file từ HF Bucket trong notebook 'inference-queries.ipynb' trước.\n"
-            f"2. Hoặc kiểm tra xem đã tích chọn secret HF_TOKEN trong menu Add-ons -> Secrets trên Kaggle chưa."
+            f"1. Kiểm tra lại tham số --dense-dir (đang truyền: {args.dense_dir}).\n"
+            f"2. Đảm bảo Kaggle Dataset chứa file .faiss đã được add vào Notebook.\n"
+            f"3. Hoặc tải từ HF Bucket trong notebook 'inference-queries.ipynb' trước."
         )
 
     logger.info(f"Using FAISS index: {dense_file} ({dense_file.stat().st_size / (1024*1024):.2f} MB)")
-    pipeline.load_indices(indices_dir)
+    logger.info(f"Using Sparse/BM25 directory: {sparse_path}")
+
+    pipeline.load_indices(
+        indices_dir=indices_dir,
+        dense_dir=dense_dir,
+        sparse_dir=sparse_path,
+    )
 
     # Resolve queries path
     queries_path = args.queries
