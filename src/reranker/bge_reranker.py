@@ -11,7 +11,7 @@ class BGEReranker:
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-reranker-large",
+        model_name: str = "BAAI/bge-reranker-v2-m3",
         device: str = "auto",
         batch_size: int = 16,
         use_fp16: bool = True,

@@ -71,11 +71,12 @@ class DenseIndex:
         results = []
         if hasattr(self, "_sqlite_conn") and self._sqlite_conn is not None:
             cur = self._sqlite_conn.cursor()
+            id_col = getattr(self, "_id_col", "chunk_id")
             for dist, idx_val in zip(distances[0], indices[0]):
                 if idx_val < 0 or idx_val >= self.index.ntotal:
                     continue
                 row = cur.execute(
-                    "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE idx = ?",
+                    f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?",
                     (int(idx_val),),
                 ).fetchone()
                 if row:
@@ -229,8 +230,11 @@ class DenseIndex:
 
         if sqlite_file.exists():
             idx._sqlite_conn = sqlite3.connect(sqlite_file)
+            cur = idx._sqlite_conn.cursor()
+            cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
+            idx._id_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
             logger.info(
-                f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir}"
+                f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir} (key column: {idx._id_col})"
             )
         elif meta_file.exists():
             with open(meta_file, encoding="utf-8") as f:

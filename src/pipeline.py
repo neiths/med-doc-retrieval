@@ -306,21 +306,62 @@ class MedicalRetrievalPipeline:
                 sparse_top_k=self.config.retrieval.sparse_top_k,
             )
         elif self.dense_index is not None:
-            dense_results = self.dense_index.search(
-                query_embedding=q_emb,
-                top_k=self.config.retrieval.hybrid_top_k,
-            )
-            local_candidates = [
-                {
-                    "doc_id": r[2].get("doc_id"),
-                    "chunk_id": r[0],
-                    "chunk_text": r[2].get("chunk_text"),
-                    "score": r[1],
-                    "lang": r[2].get("lang", "vi"),
-                    "metadata": {"title": r[2].get("title", "")},
-                }
-                for r in dense_results
-            ]
+            # Multi-lingual Multi-query Dense Retrieval (VI + EN Translation + ZH Keywords)
+            dense_queries = [(1.0, q_emb)]
+
+            # 1. English Translated Query Embedding (for matching English PubMed articles)
+            en_text = None
+            if enriched and enriched.get("translated_en"):
+                en_text = enriched["translated_en"]
+            elif self.translator and self.config.query_translation.enabled:
+                en_text = self.translator.translate_to_english(query)
+
+            if en_text and en_text.strip():
+                en_dense = self.embedder.encode_dense([en_text.strip()])
+                dense_queries.append((0.85, en_dense[0]))
+
+            # 2. Chinese Medical Keywords Embedding (for matching Chinese clinical corpus)
+            zh_text = None
+            if enriched and enriched.get("zh_keywords"):
+                zh_text = enriched["zh_keywords"]
+            elif self.translator:
+                zh_text = self.translator.extract_chinese_keywords(query)
+
+            if zh_text and zh_text.strip():
+                zh_dense = self.embedder.encode_dense([zh_text.strip()])
+                dense_queries.append((0.75, zh_dense[0]))
+
+            # 3. Search and fuse multilingual results using Reciprocal Rank Fusion (RRF)
+            candidate_pool: dict[str, dict[str, Any]] = {}
+            for weight, emb in dense_queries:
+                d_res = self.dense_index.search(
+                    query_embedding=emb,
+                    top_k=self.config.retrieval.hybrid_top_k,
+                )
+                for rank, (cid, score, meta) in enumerate(d_res):
+                    key = str(cid)
+                    rrf_contrib = weight * (1.0 / (60.0 + rank))
+                    if key not in candidate_pool:
+                        candidate_pool[key] = {
+                            "doc_id": meta.get("doc_id"),
+                            "chunk_id": cid,
+                            "chunk_text": meta.get("chunk_text"),
+                            "contextual_text": meta.get("contextual_text") or meta.get("chunk_text"),
+                            "score": rrf_contrib,
+                            "dense_score": float(score),
+                            "lang": meta.get("lang", "vi"),
+                            "metadata": {"title": meta.get("title", "")},
+                        }
+                    else:
+                        candidate_pool[key]["score"] += rrf_contrib
+                        if float(score) > candidate_pool[key].get("dense_score", -999.0):
+                            candidate_pool[key]["dense_score"] = float(score)
+
+            local_candidates = sorted(
+                candidate_pool.values(),
+                key=lambda x: x["score"],
+                reverse=True,
+            )[: self.config.retrieval.hybrid_top_k]
 
         # 3. Dynamic English Retrieval via PubMed (EN)
         pubmed_candidates: list[dict[str, Any]] = []

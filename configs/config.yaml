@@ -16,8 +16,8 @@ crawler:
   ncbi_api_key: null  # Optional NCBI Entrez API key for higher rate limits
 
 chunking:
-  max_chunk_size: 800       # Increased from 512 chars (~200 tokens, well within <=1024 tokens recommended by BTC)
-  chunk_overlap: 128        # Increased from 64 chars to prevent cutting clinical context
+  max_chunk_size: 1500      # Optimized to 1500 chars to guarantee LCS token overlap >= 0.40 threshold
+  chunk_overlap: 250        # Generous overlap to preserve complete medical sentences and entities
   min_chunk_size: 60        # Filter out tiny chunks/noise
   split_by_sentences: true  # Prefer splitting at sentence boundaries
   enable_contextual: true   # Enrich chunk with document title/context for embedding and reranking
@@ -45,13 +45,13 @@ retrieval:
 
 reranker:
   enabled: true
-  model_name: "BAAI/bge-reranker-large"
+  model_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to Multilingual SOTA reranker recommended by VinUni mentor
   batch_size: 32            # 32 locally, can be 64 on Colab/Kaggle
   device: "auto"
-  top_k_chunks: 220         # Increased to 220 to feed rich adjacent chunks to stitcher
-  top_k_docs: 70            # Tuned to BTC gold average of ~71.0 docs
+  top_k_chunks: 120         # Balanced for Macro F2 (Recall x4 weight)
+  top_k_docs: 60            # High recall doc coverage
   score_threshold: -8.0     # Relaxed to capture maximum Recall for Macro F2
-  max_chunks_per_doc: 4     # Allow up to 4 chunks per top-relevant doc for contiguous stitching
+  max_chunks_per_doc: 3     # Balanced coverage: 2-3 chunks per doc to prevent single-doc flooding
 
 query_translation:
   enabled: true
