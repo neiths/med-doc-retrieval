@@ -141,12 +141,70 @@ def main():
     pipeline = MedicalRetrievalPipeline(config=config)
 
     indices_dir = args.indices_dir
-    dense_file = indices_dir / "dense_index.faiss"
-    bm25s_dir = indices_dir / "bm25s_index"
+    dense_file = None
 
-    if not dense_file.exists():
-        raise FileNotFoundError(f"FAISS index {dense_file} not found in {indices_dir}!")
+    # Check candidates in indices_dir
+    for candidate in [
+        indices_dir / "dense_index_sq8.faiss",
+        indices_dir / "dense_index.faiss",
+    ]:
+        if candidate.exists():
+            dense_file = candidate
+            break
 
+    if dense_file is None:
+        faiss_matches = list(indices_dir.glob("*.faiss")) if indices_dir.exists() else []
+        if faiss_matches:
+            dense_file = faiss_matches[0]
+        elif Path("/kaggle/input").exists():
+            k_faiss = list(Path("/kaggle/input").rglob("*.faiss"))
+            if k_faiss:
+                dense_file = k_faiss[0]
+                indices_dir = dense_file.parent
+                logger.info(f"Auto-detected FAISS index in Kaggle input: {dense_file}")
+
+    # If still not found, try auto-downloading lightweight SQ8 index from HF Bucket
+    if dense_file is None:
+        logger.info(f"FAISS index not found in {indices_dir}. Checking for HF_TOKEN to auto-download from HF Bucket...")
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            try:
+                from kaggle_secrets import UserSecretsClient
+                hf_token = UserSecretsClient().get_secret("HF_TOKEN")
+            except Exception:
+                pass
+
+        if hf_token:
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=hf_token)
+                indices_dir.mkdir(parents=True, exist_ok=True)
+                download_files = [
+                    ("indices/dense_index_sq8.faiss", str(indices_dir / "dense_index_sq8.faiss")),
+                    ("indices/chunks_meta_slim.sqlite", str(indices_dir / "chunks_meta_slim.sqlite")),
+                    ("indices/dense_metadata_sq8.json", str(indices_dir / "dense_metadata_sq8.json")),
+                ]
+                logger.info("📥 Auto-downloading lightweight SQ8 index + slim SQLite (~4.9 GB) from HF Bucket 'nieths/ViBioMIR'...")
+                api.download_bucket_files(
+                    bucket_id="nieths/ViBioMIR",
+                    files=download_files,
+                    token=hf_token,
+                )
+                if (indices_dir / "dense_index_sq8.faiss").exists():
+                    dense_file = indices_dir / "dense_index_sq8.faiss"
+                    logger.info("✅ Successfully downloaded SQ8 index from Hugging Face Bucket!")
+            except Exception as e:
+                logger.warning(f"Could not auto-download from HF Bucket: {e}")
+
+    if dense_file is None or not dense_file.exists():
+        raise FileNotFoundError(
+            f"❌ Không tìm thấy file FAISS index (*.faiss) trong '{indices_dir}'!\n"
+            f"👉 Cách khắc phục:\n"
+            f"1. Hãy đảm bảo bạn đã chạy cell tải file từ HF Bucket trong notebook 'inference-queries.ipynb' trước.\n"
+            f"2. Hoặc kiểm tra xem đã tích chọn secret HF_TOKEN trong menu Add-ons -> Secrets trên Kaggle chưa."
+        )
+
+    logger.info(f"Using FAISS index: {dense_file} ({dense_file.stat().st_size / (1024*1024):.2f} MB)")
     pipeline.load_indices(indices_dir)
 
     # Resolve queries path
@@ -165,6 +223,11 @@ def main():
         elif raw_queries.exists():
             queries_path = raw_queries
             logger.info(f"Using raw queries: {queries_path}")
+        elif Path("/kaggle/input").exists():
+            k_query = list(Path("/kaggle/input").rglob("query.parquet"))
+            if k_query:
+                queries_path = k_query[0]
+                logger.info(f"Found query parquet in Kaggle input: {queries_path}")
         else:
             logger.info("Queries file not found locally. Auto-downloading query.parquet from Hugging Face...")
             try:

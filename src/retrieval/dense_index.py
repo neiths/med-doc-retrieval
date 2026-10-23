@@ -138,11 +138,22 @@ class DenseIndex:
         import sqlite3
 
         load_dir = Path(directory)
-        faiss_file = (
-            load_dir / "dense_index_sq8.faiss"
-            if (load_dir / "dense_index_sq8.faiss").exists()
-            else (load_dir / "dense_index.faiss")
-        )
+        faiss_candidates = [
+            load_dir / "dense_index_sq8.faiss",
+            load_dir / "dense_index.faiss",
+        ]
+        faiss_file = None
+        for fc in faiss_candidates:
+            if fc.exists():
+                faiss_file = fc
+                break
+        if faiss_file is None:
+            all_faiss = list(load_dir.glob("*.faiss"))
+            if all_faiss:
+                faiss_file = all_faiss[0]
+            else:
+                faiss_file = load_dir / "dense_index.faiss"
+
         sqlite_file = (
             load_dir / "chunks_meta_slim.sqlite"
             if (load_dir / "chunks_meta_slim.sqlite").exists()
@@ -154,6 +165,7 @@ class DenseIndex:
             else (load_dir / "dense_metadata.json")
         )
         chunks_jsonl = Path("data/processed/chunks.jsonl")
+        parquet_chunks = load_dir / "chunks_meta.parquet"
 
         idx = cls(dimension=1024)
         try:
@@ -164,7 +176,39 @@ class DenseIndex:
 
         # Auto-create lightweight SQLite metadata if not already present
         if not sqlite_file.exists():
-            if chunks_jsonl.exists():
+            if parquet_chunks.exists():
+                logger.info(f"Converting {parquet_chunks} into fast SQLite metadata index (RAM-safe)...")
+                import pyarrow.parquet as pq
+                conn = sqlite3.connect(sqlite_file)
+                cur = conn.cursor()
+                cur.execute(
+                    "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
+                )
+                tbl = pq.read_table(str(parquet_chunks))
+                pylist = tbl.to_pylist()
+                batch = []
+                for i, r in enumerate(pylist):
+                    raw_c = r.get("contextual_text") or r.get("chunk_text") or ""
+                    batch.append(
+                        (
+                            i,
+                            str(r.get("doc_id", "")),
+                            str(r.get("chunk_id", i)),
+                            raw_c,
+                            r.get("title", ""),
+                            r.get("lang", "en"),
+                        )
+                    )
+                    if len(batch) >= 20000:
+                        cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                        conn.commit()
+                        batch.clear()
+                if batch:
+                    cur.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)", batch)
+                    conn.commit()
+                conn.close()
+                logger.info(f"Created SQLite metadata index from parquet at {sqlite_file}")
+            elif chunks_jsonl.exists():
                 logger.info(f"Building fast SQLite metadata index from {chunks_jsonl} (RAM-safe)...")
                 conn = sqlite3.connect(sqlite_file)
                 cur = conn.cursor()
