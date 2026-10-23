@@ -81,13 +81,21 @@ class SparseIndex:
 
         if self._sqlite_conn is not None:
             cur = self._sqlite_conn.cursor()
+            id_col = getattr(self, "_id_col", "idx")
             for idx, score in zip(top_indices, top_scores):
                 if score <= 0 or idx < 0 or idx >= len(self.chunk_ids):
                     continue
                 row = cur.execute(
-                    "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE idx = ?",
+                    f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?",
                     (int(idx),),
                 ).fetchone()
+                if not row and id_col != "rowid":
+                    # Fallback to rowid
+                    row = cur.execute(
+                        "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE rowid = ?",
+                        (int(idx) + 1,),
+                    ).fetchone()
+
                 if row:
                     raw_c = row[2] or ""
                     if raw_c.startswith("Tiêu đề:") and "\nNội dung: " in raw_c:
@@ -104,7 +112,25 @@ class SparseIndex:
             for idx, score in zip(top_indices, top_scores):
                 if score <= 0 or idx < 0 or idx >= len(self.chunk_ids):
                     continue
-                results.append((self.chunk_ids[idx], float(score), self.chunk_metadata[idx]))
+                cid = self.chunk_ids[idx] if idx < len(self.chunk_ids) else str(idx)
+                if idx < len(self.chunk_metadata) and self.chunk_metadata[idx]:
+                    m = self.chunk_metadata[idx]
+                    meta = {
+                        "doc_id": m.get("doc_id", cid.split("_")[0] if "_" in str(cid) else str(cid)),
+                        "chunk_id": m.get("chunk_id", cid),
+                        "chunk_text": m.get("chunk_text", ""),
+                        "title": m.get("title", ""),
+                        "lang": m.get("lang", "vi"),
+                    }
+                else:
+                    meta = {
+                        "doc_id": cid.split("_")[0] if "_" in str(cid) else str(cid),
+                        "chunk_id": cid,
+                        "chunk_text": "",
+                        "title": "",
+                        "lang": "vi",
+                    }
+                results.append((cid, float(score), meta))
 
         return results
 
@@ -133,15 +159,22 @@ class SparseIndex:
         logger.info(f"Saved memory-efficient bm25s sparse index to {bm25s_dir}")
 
     @classmethod
-    def load(cls, directory: Path | str) -> "SparseIndex":
+    def load(
+        cls,
+        directory: Path | str,
+        fallback_meta_dir: Path | str | None = None,
+        chunks_meta_path: Path | str | None = None,
+    ) -> "SparseIndex":
         """Loads sparse index from disk using zero-RAM memory mapping."""
         import sqlite3
 
         load_dir = Path(directory)
         bm25s_candidates = [
+            load_dir,
             load_dir / "bm25s_index",
             load_dir / "bm25s_index" / "bm25s_index",
             load_dir.parent / "indices" / "bm25s_index",
+            Path("data/indices/bm25s_index"),
             Path("/kaggle/working/data/indices/bm25s_index"),
             Path("/kaggle/working/med-doc-retrieval/data/indices/bm25s_index"),
         ]
@@ -155,11 +188,47 @@ class SparseIndex:
         if not meta_file.exists() and bm25s_dir:
             if (bm25s_dir.parent / "bm25s_metadata.json").exists():
                 meta_file = bm25s_dir.parent / "bm25s_metadata.json"
+            elif (bm25s_dir / "bm25s_metadata.json").exists():
+                meta_file = bm25s_dir / "bm25s_metadata.json"
 
-        sqlite_file = load_dir / "chunks_meta.sqlite"
-        if not sqlite_file.exists() and bm25s_dir:
-            if (bm25s_dir.parent / "chunks_meta.sqlite").exists():
-                sqlite_file = bm25s_dir.parent / "chunks_meta.sqlite"
+        # Search for SQLite metadata (priority: explicit path -> chunks_meta_slim -> chunks_meta)
+        sqlite_file = None
+        if chunks_meta_path:
+            p = Path(chunks_meta_path)
+            if p.exists() and p.suffix in [".sqlite", ".db"]:
+                sqlite_file = p
+
+        if sqlite_file is None:
+            sqlite_candidates = [
+                load_dir / "chunks_meta_slim.sqlite",
+                load_dir / "chunks_meta.sqlite",
+            ]
+            if bm25s_dir:
+                sqlite_candidates.extend([
+                    bm25s_dir.parent / "chunks_meta_slim.sqlite",
+                    bm25s_dir.parent / "chunks_meta.sqlite",
+                ])
+            if fallback_meta_dir:
+                fb = Path(fallback_meta_dir)
+                sqlite_candidates.extend([
+                    fb / "chunks_meta_slim.sqlite",
+                    fb / "chunks_meta.sqlite",
+                    fb.parent / "chunks_meta_slim.sqlite",
+                    fb.parent / "chunks_meta.sqlite",
+                ])
+            sqlite_candidates.extend([
+                Path("data/indices/chunks_meta_slim.sqlite"),
+                Path("data/indices/chunks_meta.sqlite"),
+                Path("/kaggle/working/data/indices/chunks_meta_slim.sqlite"),
+                Path("/kaggle/working/data/indices/chunks_meta.sqlite"),
+            ])
+            if Path("/kaggle/input").exists():
+                sqlite_candidates.extend(list(Path("/kaggle/input").rglob("chunks_meta*.sqlite")))
+
+            for cand in sqlite_candidates:
+                if cand.exists() and cand.stat().st_size > 0:
+                    sqlite_file = cand
+                    break
 
         pkl_file = load_dir / "bm25_index.pkl"
 
@@ -173,14 +242,16 @@ class SparseIndex:
                 idx.b = meta.get("b", 0.75)
                 idx.chunk_ids = meta.get("chunk_ids", [])
                 idx.chunk_metadata = meta.get("chunk_metadata", [])
-            elif sqlite_file.exists():
+
+            if sqlite_file is not None and sqlite_file.exists():
                 idx._sqlite_conn = sqlite3.connect(sqlite_file)
                 cur = idx._sqlite_conn.cursor()
-                rows = cur.execute("SELECT chunk_id FROM chunks ORDER BY idx").fetchall()
-                idx.chunk_ids = [r[0] for r in rows]
-
-            if sqlite_file.exists():
-                idx._sqlite_conn = sqlite3.connect(sqlite_file)
+                cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
+                idx._id_col = "idx" if "idx" in cols else ("chunk_id" if "chunk_id" in cols else "rowid")
+                logger.info(f"Connected to SQLite metadata: {sqlite_file} (key column: {idx._id_col})")
+                if not idx.chunk_ids:
+                    rows = cur.execute(f"SELECT chunk_id FROM chunks ORDER BY {idx._id_col}").fetchall()
+                    idx.chunk_ids = [r[0] for r in rows]
 
             logger.info(f"Loaded bm25s sparse index ({len(idx.chunk_ids):,} chunks) via zero-copy mmap.")
             return idx

@@ -71,6 +71,12 @@ def main():
         help="Custom path to sparse BM25 index directory (e.g. data/indices). Defaults to --indices-dir.",
     )
     parser.add_argument(
+        "--chunks-meta-path",
+        type=Path,
+        default=None,
+        help="Custom path to chunks metadata file (chunks_meta_slim.sqlite, chunks_meta.sqlite, or chunks_meta.parquet).",
+    )
+    parser.add_argument(
         "--queries",
         type=Path,
         default=None,
@@ -230,10 +236,37 @@ def main():
     logger.info(f"Using FAISS index: {dense_file} ({dense_file.stat().st_size / (1024*1024):.2f} MB)")
     logger.info(f"Using Sparse/BM25 directory: {sparse_path}")
 
+    # Resolve chunks metadata path
+    chunks_meta_path = args.chunks_meta_path
+    if chunks_meta_path is None:
+        meta_candidates = [
+            sparse_path / "chunks_meta_slim.sqlite",
+            sparse_path / "chunks_meta.sqlite",
+            dense_dir / "chunks_meta_slim.sqlite",
+            dense_dir / "chunks_meta.sqlite",
+            indices_dir / "chunks_meta_slim.sqlite",
+            indices_dir / "chunks_meta.sqlite",
+            sparse_path / "chunks_meta.parquet",
+            dense_dir / "chunks_meta.parquet",
+        ]
+        for mc in meta_candidates:
+            if mc.exists() and mc.stat().st_size > 0:
+                chunks_meta_path = mc
+                break
+
+        if chunks_meta_path is None and Path("/kaggle/input").exists():
+            k_meta = list(Path("/kaggle/input").rglob("chunks_meta*.sqlite"))
+            if k_meta:
+                chunks_meta_path = k_meta[0]
+
+    if chunks_meta_path:
+        logger.info(f"Using Chunks Metadata: {chunks_meta_path}")
+
     pipeline.load_indices(
         indices_dir=indices_dir,
         dense_dir=dense_dir,
         sparse_dir=sparse_path,
+        chunks_meta_path=chunks_meta_path,
     )
 
     # Resolve queries path

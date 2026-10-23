@@ -133,10 +133,15 @@ class DenseIndex:
         logger.info(f"Saved FAISS index ({self.index.ntotal} items) to {save_dir}")
 
     @classmethod
-    def load(cls, directory: Path | str, fallback_meta_dir: Path | str | None = None) -> "DenseIndex":
+    def load(
+        cls,
+        directory: Path | str,
+        fallback_meta_dir: Path | str | None = None,
+        chunks_meta_path: Path | str | None = None,
+    ) -> "DenseIndex":
         """Loads FAISS index and metadata from disk using zero-RAM memory mapping and SQLite.
         
-        Supports separate directory/file for FAISS index and fallback metadata directory.
+        Supports separate directory/file for FAISS index, custom metadata file path, and fallback metadata directory.
         """
         import sqlite3
 
@@ -162,17 +167,24 @@ class DenseIndex:
                 else:
                     faiss_file = load_dir / "dense_index.faiss"
 
-        sqlite_file = (
-            load_dir / "chunks_meta_slim.sqlite"
-            if (load_dir / "chunks_meta_slim.sqlite").exists()
-            else (load_dir / "chunks_meta.sqlite")
-        )
-        if not sqlite_file.exists() and fallback_meta_dir:
-            fb = Path(fallback_meta_dir)
-            if (fb / "chunks_meta_slim.sqlite").exists():
-                sqlite_file = fb / "chunks_meta_slim.sqlite"
-            elif (fb / "chunks_meta.sqlite").exists():
-                sqlite_file = fb / "chunks_meta.sqlite"
+        sqlite_file = None
+        if chunks_meta_path:
+            p = Path(chunks_meta_path)
+            if p.exists() and p.suffix in [".sqlite", ".db"]:
+                sqlite_file = p
+
+        if sqlite_file is None:
+            sqlite_file = (
+                load_dir / "chunks_meta_slim.sqlite"
+                if (load_dir / "chunks_meta_slim.sqlite").exists()
+                else (load_dir / "chunks_meta.sqlite")
+            )
+            if not sqlite_file.exists() and fallback_meta_dir:
+                fb = Path(fallback_meta_dir)
+                if (fb / "chunks_meta_slim.sqlite").exists():
+                    sqlite_file = fb / "chunks_meta_slim.sqlite"
+                elif (fb / "chunks_meta.sqlite").exists():
+                    sqlite_file = fb / "chunks_meta.sqlite"
 
         meta_file = (
             load_dir / "dense_metadata_sq8.json"
