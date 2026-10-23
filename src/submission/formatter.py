@@ -151,7 +151,7 @@ class SubmissionPackage:
     @staticmethod
     def validate_submission_data(
         data: list[dict[str, Any]],
-        stitch_adjacent: bool = True,
+        stitch_adjacent: bool = False,
     ) -> list[QuerySubmission]:
         """Validates that predictions conform to the official competition schema."""
         validated = []

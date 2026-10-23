@@ -109,8 +109,8 @@ class DocumentChunker:
 
     def __init__(
         self,
-        max_chunk_size: int = 512,
-        chunk_overlap: int = 64,
+        max_chunk_size: int = 750,
+        chunk_overlap: int = 120,
         min_chunk_size: int = 50,
         split_by_sentences: bool = True,
         enable_contextual: bool = True,

@@ -16,8 +16,8 @@ crawler:
   ncbi_api_key: null  # Optional NCBI Entrez API key for higher rate limits
 
 chunking:
-  max_chunk_size: 1500      # Optimized to 1500 chars to guarantee LCS token overlap >= 0.40 threshold
-  chunk_overlap: 250        # Generous overlap to preserve complete medical sentences and entities
+  max_chunk_size: 750       # Optimized to 750 chars (~150 tokens) to strictly satisfy BTC new bi-directional LCS >= 0.40
+  chunk_overlap: 120        # Overlap to preserve complete medical sentences and entities
   min_chunk_size: 60        # Filter out tiny chunks/noise
   split_by_sentences: true  # Prefer splitting at sentence boundaries
   enable_contextual: true   # Enrich chunk with document title/context for embedding and reranking
