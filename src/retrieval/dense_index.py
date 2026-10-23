@@ -138,9 +138,21 @@ class DenseIndex:
         import sqlite3
 
         load_dir = Path(directory)
-        faiss_file = load_dir / "dense_index.faiss"
-        sqlite_file = load_dir / "chunks_meta.sqlite"
-        meta_file = load_dir / "dense_metadata.json"
+        faiss_file = (
+            load_dir / "dense_index_sq8.faiss"
+            if (load_dir / "dense_index_sq8.faiss").exists()
+            else (load_dir / "dense_index.faiss")
+        )
+        sqlite_file = (
+            load_dir / "chunks_meta_slim.sqlite"
+            if (load_dir / "chunks_meta_slim.sqlite").exists()
+            else (load_dir / "chunks_meta.sqlite")
+        )
+        meta_file = (
+            load_dir / "dense_metadata_sq8.json"
+            if (load_dir / "dense_metadata_sq8.json").exists()
+            else (load_dir / "dense_metadata.json")
+        )
         chunks_jsonl = Path("data/processed/chunks.jsonl")
 
         idx = cls(dimension=1024)
