@@ -122,6 +122,14 @@ class BGEM3Embedder:
                 convert_to_numpy=True,
             ).astype(np.float32)
 
+    def encode_dense(
+        self,
+        texts: str | list[str],
+        show_progress_bar: bool = False,
+    ) -> np.ndarray:
+        """Alias for encode() to ensure compatibility."""
+        return self.encode(texts, show_progress_bar=show_progress_bar)
+
     def encode_sparse(
         self,
         texts: str | list[str],

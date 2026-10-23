@@ -317,7 +317,7 @@ class MedicalRetrievalPipeline:
                 en_text = self.translator.translate_to_english(query)
 
             if en_text and en_text.strip():
-                en_dense = self.embedder.encode_dense([en_text.strip()])
+                en_dense = self.embedder.encode([en_text.strip()])
                 dense_queries.append((0.85, en_dense[0]))
 
             # 2. Chinese Medical Keywords Embedding (for matching Chinese clinical corpus)
@@ -328,7 +328,7 @@ class MedicalRetrievalPipeline:
                 zh_text = self.translator.extract_chinese_keywords(query)
 
             if zh_text and zh_text.strip():
-                zh_dense = self.embedder.encode_dense([zh_text.strip()])
+                zh_dense = self.embedder.encode([zh_text.strip()])
                 dense_queries.append((0.75, zh_dense[0]))
 
             # 3. Search and fuse multilingual results using Reciprocal Rank Fusion (RRF)
