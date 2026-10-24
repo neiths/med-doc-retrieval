@@ -40,9 +40,10 @@ st.markdown(
         word-break: break-word !important;
     }
     .chunk-card {
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-left: 5px solid #10b981;
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
+        border-left: 5px solid #10b981 !important;
         border-radius: 8px;
         padding: 16px;
         margin-bottom: 16px;
@@ -54,20 +55,28 @@ st.markdown(
         justify-content: space-between;
         font-size: 13px;
         font-weight: 600;
-        color: #047857;
+        color: #047857 !important;
         margin-bottom: 8px;
     }
     .chunk-body {
         font-size: 14px;
-        color: #1e293b;
+        color: #0f172a !important;
         line-height: 1.6;
         white-space: pre-wrap;
     }
     .raw-box {
-        background-color: #ffffff;
-        border: 1px solid #cbd5e1;
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+        border: 1px solid #cbd5e1 !important;
         border-radius: 8px;
         padding: 18px;
+        line-height: 1.7;
+        font-size: 14px;
+        max-height: 700px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
         line-height: 1.7;
         font-size: 14px;
         max-height: 700px;

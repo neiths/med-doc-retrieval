@@ -117,19 +117,19 @@ def display_document(
                 .replace("\n", "<br>")
             )
             chunks_html += f"""
-            <div style='background:#f8f9fa; border:1px solid #dee2e6; border-left:4px solid #0d6efd; border-radius:6px; padding:12px; margin-bottom:12px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; line-height:1.6;'>
-                <div style='font-size:12px; font-weight:bold; color:#6c757d; margin-bottom:6px;'>Chunk #{i}/{doc['total_chunks']} (Chunk ID: {c['chunk_id']})</div>
-                <div style='font-size:14px; color:#212529;'>{safe_text}</div>
+            <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-left:4px solid #0d6efd; border-radius:6px; padding:12px; margin-bottom:12px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; line-height:1.6;'>
+                <div style='font-size:12px; font-weight:bold; color:#1d4ed8 !important; margin-bottom:6px;'>Chunk #{i}/{doc['total_chunks']} (Chunk ID: {c['chunk_id']})</div>
+                <div style='font-size:14px; color:#0f172a !important;'>{safe_text}</div>
             </div>
             """
         chunks_html += "</div>"
 
     html = f"""
-    <div style='border:1px solid #ced4da; border-radius:8px; padding:18px; margin:16px 0; background:white; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.06);'>
-        <div style='border-bottom:1px solid #e9ecef; padding-bottom:12px; margin-bottom:12px;'>
-            <div style='font-size:13px; color:#6c757d;'>📄 Document ID: <b>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
-            <h3 style='margin:8px 0 4px 0; color:#1a1e21; line-height:1.4;'>{doc['title']}</h3>
-            <div style='font-size:12px; color:#adb5bd;'>Độ dài toàn văn: {len(doc['full_text']):,} ký tự | Nguồn: {doc['source']}</div>
+    <div style='border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:16px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.08);'>
+        <div style='border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:12px;'>
+            <div style='font-size:13px; color:#475569 !important;'>📄 Document ID: <b style='color:#0f172a;'>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
+            <h3 style='margin:8px 0 4px 0; color:#0f172a !important; line-height:1.4;'>{doc['title']}</h3>
+            <div style='font-size:12px; color:#64748b !important;'>Độ dài toàn văn: {len(doc['full_text']):,} ký tự | Nguồn: {doc['source']}</div>
         </div>
         {chunks_html}
     </div>
@@ -299,12 +299,12 @@ def display_random_crawled_doc(
         c_words = len(text.split())
         c_chars = len(text)
         chunks_html += f"""
-        <div style='background:#f8f9fa; border:1px solid #dee2e6; border-left:4px solid #198754; border-radius:6px; padding:12px; margin-bottom:12px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; line-height:1.6;'>
+        <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-left:4px solid #198754; border-radius:6px; padding:12px; margin-bottom:12px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; line-height:1.6;'>
             <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
-                <span style='font-size:12px; font-weight:bold; color:#198754;'>🧩 Chunk #{i}/{doc['total_chunks']} (ID: {c['chunk_id']})</span>
-                <span style='font-size:11px; color:#6c757d;'>{c_chars} ký tự | {c_words} từ</span>
+                <span style='font-size:12px; font-weight:bold; color:#15803d !important;'>🧩 Chunk #{i}/{doc['total_chunks']} (ID: {c['chunk_id']})</span>
+                <span style='font-size:11px; color:#475569 !important;'>{c_chars} ký tự | {c_words} từ</span>
             </div>
-            <div style='font-size:14px; color:#212529;'>{safe_text}</div>
+            <div style='font-size:14px; color:#0f172a !important;'>{safe_text}</div>
         </div>
         """
 
@@ -318,25 +318,25 @@ def display_random_crawled_doc(
         safe_raw += "<br><i>[...Văn bản còn tiếp tục...]</i>"
 
     html = f"""
-    <div style='border:1px solid #ced4da; border-radius:8px; padding:18px; margin:16px 0; background:white; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.06);'>
-        <div style='border-bottom:1px solid #e9ecef; padding-bottom:12px; margin-bottom:12px;'>
-            <div style='font-size:13px; color:#6c757d;'>📄 Document ID: <b>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
-            <h3 style='margin:8px 0 4px 0; color:#1a1e21; line-height:1.4;'>{doc['title']}</h3>
+    <div style='border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:16px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.08);'>
+        <div style='border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:12px;'>
+            <div style='font-size:13px; color:#475569 !important;'>📄 Document ID: <b style='color:#0f172a;'>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
+            <h3 style='margin:8px 0 4px 0; color:#0f172a !important; line-height:1.4;'>{doc['title']}</h3>
             <div style='font-size:12px; margin-top:4px;'>{url_link}</div>
-            <div style='font-size:12px; color:#6c757d; margin-top:4px;'>Tổng độ dài văn bản gốc: <b>{doc['char_count']:,}</b> ký tự (<b>{doc['word_count']:,}</b> từ)</div>
+            <div style='font-size:12px; color:#475569 !important; margin-top:4px;'>Tổng độ dài văn bản gốc: <b style='color:#0f172a;'>{doc['char_count']:,}</b> ký tự (<b style='color:#0f172a;'>{doc['word_count']:,}</b> từ)</div>
         </div>
 
         <div style='display:grid; grid-template-columns: 1fr 1fr; gap:16px;'>
             <div>
-                <h4 style='color:#0d6efd; margin-top:0; border-bottom:2px solid #0d6efd; padding-bottom:4px;'>📜 Văn Bản Gốc Cào Về (Raw Text)</h4>
-                <div style='max-height:550px; overflow-y:auto; background:#fdfdfe; border:1px solid #e2e8f0; border-radius:6px; padding:12px; font-size:13px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; word-break:break-word;'>
+                <h4 style='color:#1d4ed8 !important; margin-top:0; border-bottom:2px solid #1d4ed8; padding-bottom:4px;'>📜 Văn Bản Gốc Cào Về (Raw Text)</h4>
+                <div style='max-height:550px; overflow-y:auto; background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-radius:6px; padding:14px; font-size:13.5px; line-height:1.7; white-space:pre-wrap; word-wrap:break-word; word-break:break-word;'>
                     {safe_raw}
                 </div>
             </div>
             <div>
-                <h4 style='color:#198754; margin-top:0; border-bottom:2px solid #198754; padding-bottom:4px;'>🧩 Các Chunks Được Chia Ra ({doc['total_chunks']})</h4>
+                <h4 style='color:#15803d !important; margin-top:0; border-bottom:2px solid #15803d; padding-bottom:4px;'>🧩 Các Chunks Được Chia Ra ({doc['total_chunks']})</h4>
                 <div style='max-height:550px; overflow-y:auto; padding-right:4px;'>
-                    {chunks_html if chunks_html else "<i>Tài liệu này chưa có chunk trong database.</i>"}
+                    {chunks_html if chunks_html else "<i style='color:#475569;'>Tài liệu này chưa có chunk trong database.</i>"}
                 </div>
             </div>
         </div>
