@@ -163,3 +163,184 @@ def print_document(
             else:
                 print()
     print(separator + "\n")
+
+
+def get_random_crawled_doc(
+    raw_dir: str | Path = "data/raw",
+    db_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+    target_lang: str | None = None,
+) -> dict[str, Any] | None:
+    """Randomly samples a document from the raw crawled shards and pulls its constituent chunks.
+
+    Args:
+        raw_dir: Directory containing crawled_shard_*.jsonl files.
+        db_path: Path to chunks_meta_slim.sqlite.
+        target_lang: Optional language code ('vi', 'zh', 'en').
+
+    Returns:
+        Dict with doc_id, url, title, lang, raw_text, total_chunks, chunks, char_count, word_count.
+    """
+    import random
+
+    raw_path = Path(raw_dir)
+    shards = list(raw_path.glob("crawled_shard_*.jsonl"))
+    data = None
+    if shards:
+        for _ in range(25):
+            shard = random.choice(shards)
+            file_size = shard.stat().st_size
+            if file_size < 1000:
+                continue
+            offset = random.randint(0, max(0, file_size - 10000))
+            try:
+                with open(shard, "rb") as f:
+                    f.seek(offset)
+                    f.readline()
+                    line = f.readline().decode("utf-8", errors="ignore")
+                    if line.strip():
+                        record = json.loads(line)
+                        if target_lang and record.get("lang") != target_lang:
+                            continue
+                        data = record
+                        break
+            except Exception:
+                continue
+
+    if not data:
+        # Fallback to random row in SQLite
+        if Path(db_path).exists():
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT max(rowid) FROM chunks")
+            max_id = cur.fetchone()[0]
+            rand_row = random.randint(1, max_id)
+            cur.execute("SELECT doc_id FROM chunks WHERE rowid = ?", (rand_row,))
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                doc_info = get_document_and_chunks(row[0], db_path=db_path)
+                if doc_info:
+                    doc_info["raw_text"] = doc_info["full_text"]
+                    doc_info["url"] = ""
+                    doc_info["char_count"] = len(doc_info["raw_text"])
+                    doc_info["word_count"] = len(doc_info["raw_text"].split())
+                    return doc_info
+        return None
+
+    doc_id = data.get("doc_id")
+    raw_text = data.get("text", "")
+    title = data.get("title", f"Document #{doc_id}")
+    url = data.get("url", "")
+    lang = data.get("lang", "vi")
+
+    # Fetch indexed chunks for this document
+    chunks = []
+    if Path(db_path).exists():
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT chunk_id, chunk_text FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
+                (int(doc_id),),
+            )
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        if not rows:
+            cur.execute(
+                "SELECT chunk_id, chunk_text FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
+                (str(doc_id),),
+            )
+            rows = cur.fetchall()
+        conn.close()
+        chunks = [{"chunk_id": r[0], "chunk_text": r[1]} for r in rows]
+
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "url": url,
+        "lang": lang,
+        "raw_text": raw_text,
+        "total_chunks": len(chunks),
+        "chunks": chunks,
+        "char_count": len(raw_text),
+        "word_count": len(raw_text.split()),
+    }
+
+
+def display_random_crawled_doc(
+    raw_dir: str | Path = "data/raw",
+    db_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+    target_lang: str | None = None,
+) -> None:
+    """Samples a random crawled text and renders it side-by-side with its chunks in Jupyter."""
+    doc = get_random_crawled_doc(raw_dir=raw_dir, db_path=db_path, target_lang=target_lang)
+    if not doc:
+        print("❌ Không thể lấy tài liệu ngẫu nhiên từ data/raw.")
+        return
+
+    lang_badge = f"<span style='background:#0d6efd; color:white; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:bold; margin-left:8px;'>{doc['lang'].upper()}</span>"
+    chunks_badge = f"<span style='background:#198754; color:white; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:bold; margin-left:6px;'>{doc['total_chunks']} CHUNKS</span>"
+    url_link = (
+        f"<a href='{doc['url']}' target='_blank' style='color:#0d6efd; text-decoration:none;'>🔗 {doc['url'][:80]}...</a>"
+        if doc["url"]
+        else "<span style='color:#6c757d;'>Nguồn: Nội bộ</span>"
+    )
+
+    chunks_html = ""
+    for i, c in enumerate(doc["chunks"], 1):
+        text = c["chunk_text"]
+        safe_text = (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        )
+        c_words = len(text.split())
+        c_chars = len(text)
+        chunks_html += f"""
+        <div style='background:#f8f9fa; border:1px solid #dee2e6; border-left:4px solid #198754; border-radius:6px; padding:12px; margin-bottom:12px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; line-height:1.6;'>
+            <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
+                <span style='font-size:12px; font-weight:bold; color:#198754;'>🧩 Chunk #{i}/{doc['total_chunks']} (ID: {c['chunk_id']})</span>
+                <span style='font-size:11px; color:#6c757d;'>{c_chars} ký tự | {c_words} từ</span>
+            </div>
+            <div style='font-size:14px; color:#212529;'>{safe_text}</div>
+        </div>
+        """
+
+    safe_raw = (
+        doc["raw_text"][:2500].replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
+    if len(doc["raw_text"]) > 2500:
+        safe_raw += "<br><i>[...Văn bản còn tiếp tục...]</i>"
+
+    html = f"""
+    <div style='border:1px solid #ced4da; border-radius:8px; padding:18px; margin:16px 0; background:white; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.06);'>
+        <div style='border-bottom:1px solid #e9ecef; padding-bottom:12px; margin-bottom:12px;'>
+            <div style='font-size:13px; color:#6c757d;'>📄 Document ID: <b>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
+            <h3 style='margin:8px 0 4px 0; color:#1a1e21; line-height:1.4;'>{doc['title']}</h3>
+            <div style='font-size:12px; margin-top:4px;'>{url_link}</div>
+            <div style='font-size:12px; color:#6c757d; margin-top:4px;'>Tổng độ dài văn bản gốc: <b>{doc['char_count']:,}</b> ký tự (<b>{doc['word_count']:,}</b> từ)</div>
+        </div>
+
+        <div style='display:grid; grid-template-columns: 1fr 1fr; gap:16px;'>
+            <div>
+                <h4 style='color:#0d6efd; margin-top:0; border-bottom:2px solid #0d6efd; padding-bottom:4px;'>📜 Văn Bản Gốc Cào Về (Raw Text)</h4>
+                <div style='max-height:550px; overflow-y:auto; background:#fdfdfe; border:1px solid #e2e8f0; border-radius:6px; padding:12px; font-size:13px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; word-break:break-word;'>
+                    {safe_raw}
+                </div>
+            </div>
+            <div>
+                <h4 style='color:#198754; margin-top:0; border-bottom:2px solid #198754; padding-bottom:4px;'>🧩 Các Chunks Được Chia Ra ({doc['total_chunks']})</h4>
+                <div style='max-height:550px; overflow-y:auto; padding-right:4px;'>
+                    {chunks_html if chunks_html else "<i>Tài liệu này chưa có chunk trong database.</i>"}
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+    display(HTML(html))
+
