@@ -1,0 +1,8 @@
+[server]
+fileWatcherType = "poll"
+headless = false
+enableCORS = false
+enableXsrfProtection = false
+
+[runner]
+magicEnabled = false
