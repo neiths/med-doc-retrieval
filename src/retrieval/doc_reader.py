@@ -451,3 +451,324 @@ def search_bm25_interactive(
     return results_data
 
 
+_CACHED_PIPELINE = None
+
+
+def get_cached_pipeline(
+    indices_dir: str | Path = "data/indices",
+    chunks_meta_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+):
+    """Singleton cached loader for the MedicalRetrievalPipeline."""
+    global _CACHED_PIPELINE
+    if _CACHED_PIPELINE is None:
+        from src.config import load_config
+        from src.pipeline import MedicalRetrievalPipeline
+
+        config = load_config("configs/config.yaml")
+        config.pubmed.source_api = "none"
+        pipe = MedicalRetrievalPipeline(config=config)
+        pipe.load_indices(
+            indices_dir=indices_dir,
+            dense_dir=indices_dir,
+            sparse_dir=indices_dir,
+            chunks_meta_path=chunks_meta_path,
+        )
+        _CACHED_PIPELINE = pipe
+    return _CACHED_PIPELINE
+
+
+def search_multistage(
+    query: str,
+    dense_top_k: int = 8,
+    sparse_top_k: int = 8,
+    rrf_top_k: int = 12,
+    top_k_docs: int = 4,
+    indices_dir: str | Path = "data/indices",
+    chunks_meta_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+) -> dict[str, Any]:
+    """Executes search and records step-by-step intermediate results at each stage.
+
+    Stages:
+        1A. Dense FAISS SQ8 Retrieval (Semantic Vector)
+        1B. BM25s Sparse Retrieval (Exact Lexical)
+        2.  Reciprocal Rank Fusion (RRF)
+        3.  Cross-Encoder Reranking (BGE-Reranker-v2-m3)
+        4.  Final Output Extraction (Top-1 Strategy)
+    """
+    import time
+
+    pipeline = get_cached_pipeline(indices_dir=indices_dir, chunks_meta_path=chunks_meta_path)
+    t_start = time.time()
+
+    # --- STAGE 1A: Dense Retrieval ---
+    t0_dense = time.time()
+    q_emb = pipeline.embedder.encode([query])[0]
+    raw_dense = pipeline.dense_index.search(q_emb, top_k=dense_top_k)
+    dense_elapsed = (time.time() - t0_dense) * 1000
+
+    dense_candidates = []
+    dense_rank_map = {}
+    for rank, (cid, score, meta) in enumerate(raw_dense, 1):
+        dense_rank_map[cid] = rank
+        dense_candidates.append({
+            "rank": rank,
+            "chunk_id": cid,
+            "doc_id": meta.get("doc_id", "N/A"),
+            "score": float(score),
+            "title": meta.get("title", f"Document #{meta.get('doc_id')}"),
+            "lang": meta.get("lang", "vi").upper(),
+            "chunk_text": meta.get("chunk_text", "").strip(),
+            "source": "DENSE",
+        })
+
+    # --- STAGE 1B: BM25 Sparse Retrieval ---
+    t0_sparse = time.time()
+    raw_sparse = pipeline.sparse_index.search(query, top_k=sparse_top_k)
+    sparse_elapsed = (time.time() - t0_sparse) * 1000
+
+    sparse_candidates = []
+    sparse_rank_map = {}
+    for rank, (cid, score, meta) in enumerate(raw_sparse, 1):
+        sparse_rank_map[cid] = rank
+        sparse_candidates.append({
+            "rank": rank,
+            "chunk_id": cid,
+            "doc_id": meta.get("doc_id", "N/A"),
+            "score": float(score),
+            "title": meta.get("title", f"Document #{meta.get('doc_id')}"),
+            "lang": meta.get("lang", "vi").upper(),
+            "chunk_text": meta.get("chunk_text", "").strip(),
+            "source": "BM25",
+        })
+
+    # --- STAGE 2: RRF Fusion ---
+    t0_rrf = time.time()
+    all_cids = set(dense_rank_map.keys()).union(set(sparse_rank_map.keys()))
+    candidate_meta = {}
+    for c in dense_candidates:
+        candidate_meta[c["chunk_id"]] = c
+    for c in sparse_candidates:
+        if c["chunk_id"] not in candidate_meta:
+            candidate_meta[c["chunk_id"]] = c
+
+    fused_pool = []
+    for cid in all_cids:
+        d_rank = dense_rank_map.get(cid)
+        s_rank = sparse_rank_map.get(cid)
+        score_rrf = 0.0
+        if d_rank is not None:
+            score_rrf += 0.6 / (60.0 + d_rank)
+        if s_rank is not None:
+            score_rrf += 0.4 / (60.0 + s_rank)
+
+        src_label = "CẢ HAI (BOTH)" if (d_rank and s_rank) else ("CHỈ DENSE" if d_rank else "CHỈ BM25")
+        meta = candidate_meta[cid]
+        fused_pool.append({
+            "chunk_id": cid,
+            "doc_id": meta["doc_id"],
+            "title": meta["title"],
+            "lang": meta["lang"],
+            "chunk_text": meta["chunk_text"],
+            "rrf_score": score_rrf,
+            "dense_rank": d_rank,
+            "sparse_rank": s_rank,
+            "source": src_label,
+        })
+
+    fused_pool.sort(key=lambda x: x["rrf_score"], reverse=True)
+    rrf_top = fused_pool[:rrf_top_k]
+    for r, item in enumerate(rrf_top, 1):
+        item["rank"] = r
+    rrf_elapsed = (time.time() - t0_rrf) * 1000
+
+    # --- STAGE 3: Cross-Encoder Reranking ---
+    t0_rerank = time.time()
+    pairs = [(query, item["chunk_text"]) for item in rrf_top]
+    rerank_scores = pipeline.reranker.compute_scores(pairs)
+
+    reranked_pool = []
+    for item, r_score in zip(rrf_top, rerank_scores):
+        entry = dict(item)
+        entry["rerank_score"] = float(r_score)
+        entry["rrf_rank"] = item["rank"]
+        reranked_pool.append(entry)
+
+    reranked_pool.sort(key=lambda x: x["rerank_score"], reverse=True)
+    for r, item in enumerate(reranked_pool, 1):
+        item["rank"] = r
+        item["rank_delta"] = item["rrf_rank"] - r  # Positive means moved up, negative means moved down
+    rerank_elapsed = (time.time() - t0_rerank) * 1000
+
+    # --- STAGE 4: Final Extraction (Top-1 Strategy) ---
+    seen_docs = set()
+    final_docs = []
+    final_chunks = []
+    for item in reranked_pool:
+        did = str(item["doc_id"])
+        if did not in seen_docs:
+            seen_docs.add(did)
+            final_docs.append(did)
+            final_chunks.append({
+                "doc_id": did,
+                "chunk_id": item["chunk_id"],
+                "chunk_text": item["chunk_text"],
+                "title": item["title"],
+                "rerank_score": item["rerank_score"],
+            })
+        if len(final_docs) >= top_k_docs:
+            break
+
+    total_elapsed = (time.time() - t_start) * 1000
+
+    return {
+        "query": query,
+        "timing_ms": {
+            "dense": dense_elapsed,
+            "sparse": sparse_elapsed,
+            "rrf": rrf_elapsed,
+            "rerank": rerank_elapsed,
+            "total": total_elapsed,
+        },
+        "stage_1a_dense": dense_candidates,
+        "stage_1b_bm25": sparse_candidates,
+        "stage_2_rrf": rrf_top,
+        "stage_3_rerank": reranked_pool,
+        "stage_4_final": {
+            "relevant_docs": final_docs,
+            "relevant_chunks": final_chunks,
+        },
+    }
+
+
+def display_multistage_search(
+    query: str,
+    dense_top_k: int = 5,
+    sparse_top_k: int = 5,
+    rrf_top_k: int = 8,
+    top_k_docs: int = 4,
+    indices_dir: str | Path = "data/indices",
+    chunks_meta_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+) -> None:
+    """Renders a comprehensive visual breakdown of each stage in Jupyter."""
+    data = search_multistage(
+        query=query,
+        dense_top_k=dense_top_k,
+        sparse_top_k=sparse_top_k,
+        rrf_top_k=rrf_top_k,
+        top_k_docs=top_k_docs,
+        indices_dir=indices_dir,
+        chunks_meta_path=chunks_meta_path,
+    )
+
+    t = data["timing_ms"]
+
+    def make_card(rank, did, lang, score_badge, title, text, extra_info=""):
+        safe_text = (
+            text[:200].replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", " ")
+        ) + ("..." if len(text) > 200 else "")
+        return f"""
+        <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-radius:6px; padding:10px; margin-bottom:8px;'>
+            <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>
+                <div>
+                    <span style='background:#0f172a; color:white; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>#{rank}</span>
+                    <span style='font-size:12px; font-weight:bold; margin-left:6px;'>Doc {did}</span>
+                    <span style='background:#e2e8f0; color:#0f172a; font-size:10px; padding:1px 5px; border-radius:3px; margin-left:4px;'>{lang}</span>
+                </div>
+                <div>{score_badge}</div>
+            </div>
+            <div style='font-size:12px; font-weight:600; color:#1e293b; margin-bottom:4px;'>{title}</div>
+            <div style='font-size:12px; color:#475569; line-height:1.5;'>{safe_text}</div>
+            {f"<div style='font-size:11px; color:#64748b; margin-top:4px;'>{extra_info}</div>" if extra_info else ""}
+        </div>
+        """
+
+    # Stage 1A cards
+    d_html = ""
+    for item in data["stage_1a_dense"][:dense_top_k]:
+        score_badge = f"<span style='background:#dbeafe; color:#1e40af; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>Cos: {item['score']:.3f}</span>"
+        d_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"])
+
+    # Stage 1B cards
+    s_html = ""
+    for item in data["stage_1b_bm25"][:sparse_top_k]:
+        score_badge = f"<span style='background:#fef3c7; color:#92400e; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>BM25: {item['score']:.2f}</span>"
+        s_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"])
+
+    # Stage 2 cards
+    r_html = ""
+    for item in data["stage_2_rrf"][:rrf_top_k]:
+        src_color = "#15803d" if "CẢ HAI" in item["source"] else ("#1d4ed8" if "DENSE" in item["source"] else "#b45309")
+        src_badge = f"<span style='background:{src_color}; color:white; font-size:10px; font-weight:bold; padding:1px 6px; border-radius:3px;'>{item['source']}</span>"
+        score_badge = f"<span style='background:#f1f5f9; color:#0f172a; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>RRF: {item['rrf_score']:.4f}</span>"
+        extra = f"Vị trí ban đầu: Dense #{item['dense_rank'] or '-'} | BM25 #{item['sparse_rank'] or '-'} | {src_badge}"
+        r_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], extra_info=extra)
+
+    # Stage 3 cards
+    ce_html = ""
+    for item in data["stage_3_rerank"][:rrf_top_k]:
+        delta_str = f"+{item['rank_delta']}" if item["rank_delta"] > 0 else (str(item["rank_delta"]) if item["rank_delta"] < 0 else "=")
+        delta_color = "#15803d" if item["rank_delta"] > 0 else ("#dc2626" if item["rank_delta"] < 0 else "#64748b")
+        delta_badge = f"<span style='color:{delta_color}; font-weight:bold;'>({delta_str})</span>"
+        score_badge = f"<span style='background:#dcfce7; color:#15803d; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>Logits: {item['rerank_score']:.2f}</span>"
+        extra = f"RRF ban đầu: #{item['rrf_rank']} {delta_badge}"
+        ce_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], extra_info=extra)
+
+    # Stage 4 summary
+    final = data["stage_4_final"]
+    docs_badges = " ".join([f"<span style='background:#0f172a; color:white; padding:3px 10px; border-radius:4px; font-weight:bold; font-size:13px;'>Doc {did}</span>" for did in final["relevant_docs"]])
+
+    main_html = f"""
+    <div style='border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:16px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'>
+        <div style='border-bottom:2px solid #e2e8f0; padding-bottom:12px; margin-bottom:14px;'>
+            <div style='font-size:13px; color:#475569;'>🎯 PIPELINE TRUY HỒI ĐA TẦNG (MULTI-STAGE RETRIEVAL)</div>
+            <h3 style='margin:6px 0; color:#1d4ed8;'>Query: <span style='color:#0f172a;'>"{query}"</span></h3>
+            <div style='font-size:12px; color:#64748b; margin-top:4px;'>
+                ⏱️ Tổng thời gian: <b>{t['total']:.1f} ms</b> (Dense: {t['dense']:.1f}ms | BM25: {t['sparse']:.1f}ms | RRF: {t['rrf']:.1f}ms | Rerank: {t['rerank']:.1f}ms)
+            </div>
+        </div>
+
+        <!-- STAGE 1: FIRST STAGE RETRIEVAL -->
+        <div style='background:#f1f5f9; border-radius:6px; padding:12px; margin-bottom:14px;'>
+            <h4 style='margin:0 0 10px 0; color:#1e293b;'>1️⃣ GIAI ĐOẠN 1: TÌM KIẾM SƠ BỘ (FIRST-STAGE RETRIEVAL)</h4>
+            <div style='display:grid; grid-template-columns: 1fr 1fr; gap:12px;'>
+                <div>
+                    <div style='font-weight:bold; color:#1e40af; font-size:13px; margin-bottom:6px;'>🔹 1A. Dense FAISS SQ8 (Ngữ nghĩa BGE-M3)</div>
+                    {d_html}
+                </div>
+                <div>
+                    <div style='font-weight:bold; color:#b45309; font-size:13px; margin-bottom:6px;'>🔸 1B. BM25s Sparse (Từ khóa chính xác)</div>
+                    {s_html}
+                </div>
+            </div>
+        </div>
+
+        <!-- STAGE 2: RRF FUSION -->
+        <div style='background:#f1f5f9; border-radius:6px; padding:12px; margin-bottom:14px;'>
+            <h4 style='margin:0 0 6px 0; color:#1e293b;'>2️⃣ GIAI ĐOẠN 2: HỢP NHẤT HẠNG RRF (RECIPROCAL RANK FUSION)</h4>
+            <div style='font-size:12px; color:#64748b; margin-bottom:10px;'>Công thức: RRF = 0.6 / (60 + Dense_Rank) + 0.4 / (60 + BM25_Rank). Gộp cả 2 nguồn để tăng Recall tối đa.</div>
+            {r_html}
+        </div>
+
+        <!-- STAGE 3: CROSS-ENCODER RERANKING -->
+        <div style='background:#f1f5f9; border-radius:6px; padding:12px; margin-bottom:14px;'>
+            <h4 style='margin:0 0 6px 0; color:#15803d;'>3️⃣ GIAI ĐOẠN 3: TÁI CHẤM ĐIỂM CHÉO (CROSS-ENCODER BGE-RERANKER-V2-M3)</h4>
+            <div style='font-size:12px; color:#64748b; margin-bottom:10px;'>Mô hình Cross-Attention đọc toàn bộ câu hỏi và ứng viên để lọc sạch kết quả nhiễu và đẩy bằng chứng tốt nhất lên đầu.</div>
+            {ce_html}
+        </div>
+
+        <!-- STAGE 4: FINAL SELECTION -->
+        <div style='background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:14px;'>
+            <h4 style='margin:0 0 6px 0; color:#065f46;'>4️⃣ GIAI ĐOẠN 4: TRÍCH XUẤT CUỐI CÙNG (CHIẾN LƯỢC TOP 1 F2-MACRO)</h4>
+            <div style='font-size:12px; color:#047857; margin-bottom:10px;'>Chọn ra {len(final['relevant_docs'])} tài liệu xuất sắc nhất và 1 chunk bằng chứng tốt nhất cho mỗi tài liệu:</div>
+            <div style='margin-bottom:10px;'>{docs_badges}</div>
+            <div style='font-size:12px; color:#065f46;'>Số lượng chunks trích xuất: <b>{len(final['relevant_chunks'])}</b> chunks.</div>
+        </div>
+    </div>
+    """
+    display(HTML(main_html))
+
+
+

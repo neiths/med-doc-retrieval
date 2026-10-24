@@ -20,7 +20,11 @@ if str(PROJECT_ROOT) not in sys.path:
 import streamlit as st
 
 from src.ingestion.chunker import DocumentChunker
-from src.retrieval.doc_reader import get_document_and_chunks, get_random_crawled_doc
+from src.retrieval.doc_reader import (
+    get_document_and_chunks,
+    get_random_crawled_doc,
+    search_multistage,
+)
 
 # Configure Streamlit page
 st.set_page_config(
@@ -229,13 +233,182 @@ with col5:
 st.divider()
 
 # Tabs for Views
-tab_bm25, tab_compare, tab_chunks, tab_raw, tab_sim = st.tabs([
+tab_multistage, tab_bm25, tab_compare, tab_chunks, tab_raw, tab_sim = st.tabs([
+    "🎯 Pipeline 4 Giai Đoạn (Dense ➔ BM25 ➔ RRF ➔ Rerank)",
     "🔎 Tìm Kiếm BM25 (BM25 Search)",
     "📊 So Sánh Song Song (Văn Bản Gốc vs Chunks)",
     "🧩 Danh Sách Các Chunks Đã Index",
     "📜 Toàn Văn Tài Liệu Gốc",
     "🔬 Thử Nghiệm Chunking Động",
 ])
+
+# 0. TAB MULTI-STAGE RETRIEVAL EXPLORER
+with tab_multistage:
+    st.subheader("🎯 Phân Tích Kết Quả Từng Giai Đoạn (Multi-Stage Retrieval Explorer)")
+    st.markdown(
+        """
+        Khám phá dòng chảy dữ liệu thực tế từ lúc nhận câu hỏi đến khi trích xuất bằng chứng:
+        `Query` ➔ `1. Dense + BM25` ➔ `2. RRF Fusion` ➔ `3. Cross-Encoder Rerank` ➔ `4. Trích Xuất Cuối Cùng`
+        """
+    )
+
+    ms_query = st.text_input(
+        "Nhập câu hỏi lâm sàng cần phân tích:",
+        value="paracetamol hạ sốt cho trẻ em",
+        key="ms_search_input",
+    )
+
+    c_s1, c_s2, c_btn = st.columns([1, 1, 1.5])
+    with c_s1:
+        ms_stage1_k = st.slider("Top K Giai đoạn 1 (Dense & BM25):", min_value=3, max_value=12, value=5, step=1)
+    with c_s2:
+        ms_rrf_k = st.slider("Top K Hợp nhất RRF:", min_value=4, max_value=20, value=8, step=1)
+    with c_btn:
+        st.write("")
+        st.write("")
+        run_multistage = st.button("🚀 Chạy Phân Tích 4 Giai Đoạn", type="primary", use_container_width=True)
+
+    if run_multistage or ms_query.strip():
+        with st.spinner("Đang chạy toàn bộ Pipeline 4 giai đoạn qua GPU/CPU..."):
+            ms_data = search_multistage(
+                query=ms_query.strip(),
+                dense_top_k=ms_stage1_k,
+                sparse_top_k=ms_stage1_k,
+                rrf_top_k=ms_rrf_k,
+                top_k_docs=4,
+            )
+
+        ms_t = ms_data["timing_ms"]
+
+        # Timing KPI Cards
+        st.markdown(
+            f"""
+            <div style='display:flex; gap:12px; margin: 12px 0 20px 0; flex-wrap:wrap;'>
+                <div style='background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; padding:10px 16px; flex:1; min-width:120px;'>
+                    <div style='font-size:11px; color:#64748b; font-weight:bold;'>TỔNG THỜI GIAN</div>
+                    <div style='font-size:20px; font-weight:bold; color:#0f172a;'>{ms_t['total']:.0f} ms</div>
+                </div>
+                <div style='background:#eff6ff; border:1px solid #bfdbfe; border-radius:6px; padding:10px 16px; flex:1; min-width:120px;'>
+                    <div style='font-size:11px; color:#1d4ed8; font-weight:bold;'>1A. DENSE FAISS</div>
+                    <div style='font-size:20px; font-weight:bold; color:#1e40af;'>{ms_t['dense']:.1f} ms</div>
+                </div>
+                <div style='background:#fefce8; border:1px solid #fef08a; border-radius:6px; padding:10px 16px; flex:1; min-width:120px;'>
+                    <div style='font-size:11px; color:#a16207; font-weight:bold;'>1B. BM25S</div>
+                    <div style='font-size:20px; font-weight:bold; color:#854d0e;'>{ms_t['sparse']:.1f} ms</div>
+                </div>
+                <div style='background:#f5f3ff; border:1px solid #ddd6fe; border-radius:6px; padding:10px 16px; flex:1; min-width:120px;'>
+                    <div style='font-size:11px; color:#6d28d9; font-weight:bold;'>2. RRF FUSION</div>
+                    <div style='font-size:20px; font-weight:bold; color:#5b21b6;'>{ms_t['rrf']:.1f} ms</div>
+                </div>
+                <div style='background:#ecfdf5; border:1px solid #a7f3d0; border-radius:6px; padding:10px 16px; flex:1; min-width:120px;'>
+                    <div style='font-size:11px; color:#047857; font-weight:bold;'>3. RERANKER</div>
+                    <div style='font-size:20px; font-weight:bold; color:#065f46;'>{ms_t['rerank']:.1f} ms</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # STAGE 1: Side by Side
+        st.markdown("### 1️⃣ Giai Đoạn 1: Tìm Kiếm Sơ Bộ (First-Stage Retrieval)")
+        col_dense, col_bm25 = st.columns(2)
+        with col_dense:
+            st.markdown("#### 🔹 1A. Dense FAISS SQ8 (Ngữ Nghĩa BGE-M3)")
+            for item in ms_data["stage_1a_dense"][:ms_stage1_k]:
+                with st.container():
+                    st.markdown(
+                        f"""
+                        <div class='chunk-card' style='border-left-color: #3b82f6;'>
+                            <div class='chunk-header' style='color: #1d4ed8;'>
+                                <span>#{item['rank']} | Doc ID: <b>{item['doc_id']}</b> <span class='badge badge-blue'>{item['lang']}</span></span>
+                                <span>Cosine: <b>{item['score']:.3f}</b></span>
+                            </div>
+                            <div style='font-weight:600; color:#0f172a; margin-bottom:4px;'>{item['title']}</div>
+                            <div class='chunk-body'>{item['chunk_text']}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+        with col_bm25:
+            st.markdown("#### 🔸 1B. BM25s Sparse (Từ Khóa Chính Xác)")
+            for item in ms_data["stage_1b_bm25"][:ms_stage1_k]:
+                with st.container():
+                    st.markdown(
+                        f"""
+                        <div class='chunk-card' style='border-left-color: #f59e0b;'>
+                            <div class='chunk-header' style='color: #b45309;'>
+                                <span>#{item['rank']} | Doc ID: <b>{item['doc_id']}</b> <span class='badge badge-amber'>{item['lang']}</span></span>
+                                <span>BM25 Score: <b>{item['score']:.2f}</b></span>
+                            </div>
+                            <div style='font-weight:600; color:#0f172a; margin-bottom:4px;'>{item['title']}</div>
+                            <div class='chunk-body'>{item['chunk_text']}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+        st.divider()
+
+        # STAGE 2: RRF Fusion
+        st.markdown("### 2️⃣ Giai Đoạn 2: Hợp Nhất Hạng RRF (Reciprocal Rank Fusion)")
+        st.caption("Công thức: `RRF Score = 0.6 / (60 + Dense_Rank) + 0.4 / (60 + BM25_Rank)`. Giúp gộp tối đa Recall từ cả 2 nguồn.")
+        for item in ms_data["stage_2_rrf"][:ms_rrf_k]:
+            src_tag = item["source"]
+            badge_color = "#15803d" if "CẢ HAI" in src_tag else ("#1d4ed8" if "DENSE" in src_tag else "#b45309")
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class='chunk-card' style='border-left-color: {badge_color};'>
+                        <div class='chunk-header' style='color: #334155;'>
+                            <span>#{item['rank']} | Doc ID: <b>{item['doc_id']}</b> <span style='background:{badge_color}; color:white; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:bold;'>{src_tag}</span></span>
+                            <span>RRF Score: <b>{item['rrf_score']:.4f}</b> (Dense #{item['dense_rank'] or '-'} | BM25 #{item['sparse_rank'] or '-'})</span>
+                        </div>
+                        <div style='font-weight:600; color:#0f172a; margin-bottom:4px;'>{item['title']}</div>
+                        <div class='chunk-body'>{item['chunk_text']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        st.divider()
+
+        # STAGE 3: Cross-Encoder Reranking
+        st.markdown("### 3️⃣ Giai Đoạn 3: Tái Chấm Điểm Chéo (BGE-Reranker-v2-m3)")
+        st.caption("Cross-Attention đọc cả câu hỏi và từng chunk để lọc sạch các kết quả rác và xếp lại thứ hạng chính xác nhất.")
+        for item in ms_data["stage_3_rerank"][:ms_rrf_k]:
+            delta = item["rank_delta"]
+            delta_str = f"+{delta} hạng" if delta > 0 else (f"{delta} hạng" if delta < 0 else "Giữ nguyên")
+            delta_bg = "#dcfce7" if delta > 0 else ("#fee2e2" if delta < 0 else "#f1f5f9")
+            delta_text = "#15803d" if delta > 0 else ("#b91c1c" if delta < 0 else "#64748b")
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class='chunk-card' style='border-left-color: #10b981;'>
+                        <div class='chunk-header' style='color: #065f46;'>
+                            <span>#{item['rank']} | Doc ID: <b>{item['doc_id']}</b> <span style='background:{delta_bg}; color:{delta_text}; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:bold;'>{delta_str}</span></span>
+                            <span>Rerank Logits: <b>{item['rerank_score']:.2f}</b> (RRF ban đầu: #{item['rrf_rank']})</span>
+                        </div>
+                        <div style='font-weight:600; color:#0f172a; margin-bottom:4px;'>{item['title']}</div>
+                        <div class='chunk-body'>{item['chunk_text']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+        st.divider()
+
+        # STAGE 4: Final Selection
+        st.markdown("### 4️⃣ Giai Đoạn 4: Trích Xuất Cuối Cùng (Chiến Lược Top-1 F2-Macro)")
+        final_info = ms_data["stage_4_final"]
+        st.success(f"Tài liệu được chọn nộp bài ({len(final_info['relevant_docs'])} docs): **{', '.join(['Doc #' + d for d in final_info['relevant_docs']])}**")
+
+        c_docs = st.columns(len(final_info["relevant_docs"]))
+        for col, did in zip(c_docs, final_info["relevant_docs"]):
+            with col:
+                st.button(f"👉 Mở Đọc Doc #{did}", key=f"open_ms_final_{did}", on_click=lambda d=did: setattr(st.session_state, "current_doc", load_crawled_doc_by_id(d)))
+
+st.divider()
+
 
 # 0. TAB BM25 SEARCH
 with tab_bm25:
