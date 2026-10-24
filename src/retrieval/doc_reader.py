@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import textwrap
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ def get_document_and_chunks(
     """
     db_path = Path(db_path)
     if db_path.exists():
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
         cur = conn.cursor()
         rows = []
         try:
@@ -209,7 +210,7 @@ def get_random_crawled_doc(
     if not data:
         # Fallback to random row in SQLite
         if Path(db_path).exists():
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, check_same_thread=False)
             cur = conn.cursor()
             cur.execute("SELECT max(rowid) FROM chunks")
             max_id = cur.fetchone()[0]
@@ -236,7 +237,7 @@ def get_random_crawled_doc(
     # Fetch indexed chunks for this document
     chunks = []
     if Path(db_path).exists():
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
         cur = conn.cursor()
         try:
             cur.execute(
@@ -346,6 +347,7 @@ def display_random_crawled_doc(
 
 
 _CACHED_BM25_INDEX = None
+_BM25_LOCK = threading.Lock()
 
 
 def get_cached_bm25_index(
@@ -355,13 +357,15 @@ def get_cached_bm25_index(
     """Singleton cached loader for BM25s sparse index."""
     global _CACHED_BM25_INDEX
     if _CACHED_BM25_INDEX is None:
-        from src.retrieval.sparse_index import SparseIndex
+        with _BM25_LOCK:
+            if _CACHED_BM25_INDEX is None:
+                from src.retrieval.sparse_index import SparseIndex
 
-        _CACHED_BM25_INDEX = SparseIndex.load(
-            directory=indices_dir,
-            fallback_meta_dir=indices_dir,
-            chunks_meta_path=chunks_meta_path,
-        )
+                _CACHED_BM25_INDEX = SparseIndex.load(
+                    directory=indices_dir,
+                    fallback_meta_dir=indices_dir,
+                    chunks_meta_path=chunks_meta_path,
+                )
     return _CACHED_BM25_INDEX
 
 
@@ -452,6 +456,7 @@ def search_bm25_interactive(
 
 
 _CACHED_PIPELINE = None
+_PIPELINE_LOCK = threading.Lock()
 
 
 def get_cached_pipeline(
@@ -461,19 +466,21 @@ def get_cached_pipeline(
     """Singleton cached loader for the MedicalRetrievalPipeline."""
     global _CACHED_PIPELINE
     if _CACHED_PIPELINE is None:
-        from src.config import load_config
-        from src.pipeline import MedicalRetrievalPipeline
+        with _PIPELINE_LOCK:
+            if _CACHED_PIPELINE is None:
+                from src.config import load_config
+                from src.pipeline import MedicalRetrievalPipeline
 
-        config = load_config("configs/config.yaml")
-        config.pubmed.source_api = "none"
-        pipe = MedicalRetrievalPipeline(config=config)
-        pipe.load_indices(
-            indices_dir=indices_dir,
-            dense_dir=indices_dir,
-            sparse_dir=indices_dir,
-            chunks_meta_path=chunks_meta_path,
-        )
-        _CACHED_PIPELINE = pipe
+                config = load_config("configs/config.yaml")
+                config.pubmed.source_api = "none"
+                pipe = MedicalRetrievalPipeline(config=config)
+                pipe.load_indices(
+                    indices_dir=indices_dir,
+                    dense_dir=indices_dir,
+                    sparse_dir=indices_dir,
+                    chunks_meta_path=chunks_meta_path,
+                )
+                _CACHED_PIPELINE = pipe
     return _CACHED_PIPELINE
 
 

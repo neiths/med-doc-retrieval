@@ -26,6 +26,23 @@ from src.retrieval.doc_reader import (
     search_multistage,
 )
 
+@st.cache_data(show_spinner=False)
+def cached_search_multistage(
+    query: str,
+    dense_top_k: int,
+    sparse_top_k: int,
+    rrf_top_k: int,
+    top_k_docs: int = 4,
+):
+    return search_multistage(
+        query=query,
+        dense_top_k=dense_top_k,
+        sparse_top_k=sparse_top_k,
+        rrf_top_k=rrf_top_k,
+        top_k_docs=top_k_docs,
+    )
+
+
 # Configure Streamlit page
 st.set_page_config(
     page_title="ViBioMIR Medical Document & Chunk Inspector",
@@ -270,7 +287,7 @@ with tab_multistage:
 
     if run_multistage or ms_query.strip():
         with st.spinner("Đang chạy toàn bộ Pipeline 4 giai đoạn qua GPU/CPU..."):
-            ms_data = search_multistage(
+            ms_data = cached_search_multistage(
                 query=ms_query.strip(),
                 dense_top_k=ms_stage1_k,
                 sparse_top_k=ms_stage1_k,

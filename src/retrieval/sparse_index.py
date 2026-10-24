@@ -281,7 +281,7 @@ class SparseIndex:
                 idx.chunk_metadata = meta.get("chunk_metadata", [])
 
             if sqlite_file is not None and sqlite_file.exists():
-                idx._sqlite_conn = sqlite3.connect(sqlite_file)
+                idx._sqlite_conn = sqlite3.connect(sqlite_file, check_same_thread=False)
                 cur = idx._sqlite_conn.cursor()
                 cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
                 idx._id_col = "idx" if "idx" in cols else ("chunk_id" if "chunk_id" in cols else "rowid")

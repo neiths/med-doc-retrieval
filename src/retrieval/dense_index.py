@@ -217,7 +217,7 @@ class DenseIndex:
             if parquet_chunks.exists():
                 logger.info(f"Converting {parquet_chunks} into fast SQLite metadata index (RAM-safe)...")
                 import pyarrow.parquet as pq
-                conn = sqlite3.connect(sqlite_file)
+                conn = sqlite3.connect(sqlite_file, check_same_thread=False)
                 cur = conn.cursor()
                 cur.execute(
                     "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
@@ -248,7 +248,7 @@ class DenseIndex:
                 logger.info(f"Created SQLite metadata index from parquet at {sqlite_file}")
             elif chunks_jsonl.exists():
                 logger.info(f"Building fast SQLite metadata index from {chunks_jsonl} (RAM-safe)...")
-                conn = sqlite3.connect(sqlite_file)
+                conn = sqlite3.connect(sqlite_file, check_same_thread=False)
                 cur = conn.cursor()
                 cur.execute(
                     "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
@@ -291,7 +291,7 @@ class DenseIndex:
                     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "ijson"], check=False)
                     import ijson
 
-                conn = sqlite3.connect(sqlite_file)
+                conn = sqlite3.connect(sqlite_file, check_same_thread=False)
                 cur = conn.cursor()
                 cur.execute(
                     "CREATE TABLE IF NOT EXISTS chunks (idx INTEGER PRIMARY KEY, doc_id TEXT, chunk_id TEXT, chunk_text TEXT, title TEXT, lang TEXT)"
@@ -323,7 +323,7 @@ class DenseIndex:
                 logger.info(f"Created SQLite metadata index from JSON at {sqlite_file}")
 
         if sqlite_file.exists():
-            idx._sqlite_conn = sqlite3.connect(sqlite_file)
+            idx._sqlite_conn = sqlite3.connect(sqlite_file, check_same_thread=False)
             cur = idx._sqlite_conn.cursor()
             cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
             idx._id_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
