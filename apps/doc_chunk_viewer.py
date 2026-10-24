@@ -141,6 +141,18 @@ def load_crawled_doc_by_id(doc_id: str | int) -> dict | None:
 if "current_doc" not in st.session_state:
     st.session_state.current_doc = get_random_crawled_doc()
 
+
+@st.cache_resource(show_spinner="Đang nạp BM25s sparse index...")
+def get_bm25_index():
+    from src.retrieval.sparse_index import SparseIndex
+
+    return SparseIndex.load(
+        directory="data/indices",
+        fallback_meta_dir="data/indices",
+        chunks_meta_path="data/indices/chunks_meta_slim.sqlite",
+    )
+
+
 # ----------------- SIDEBAR CONTROLS -----------------
 st.sidebar.title("🏥 Điều Khiển Dữ Liệu")
 
@@ -217,12 +229,70 @@ with col5:
 st.divider()
 
 # Tabs for Views
-tab_compare, tab_chunks, tab_raw, tab_sim = st.tabs([
+tab_bm25, tab_compare, tab_chunks, tab_raw, tab_sim = st.tabs([
+    "🔎 Tìm Kiếm BM25 (BM25 Search)",
     "📊 So Sánh Song Song (Văn Bản Gốc vs Chunks)",
     "🧩 Danh Sách Các Chunks Đã Index",
     "📜 Toàn Văn Tài Liệu Gốc",
     "🔬 Thử Nghiệm Chunking Động",
 ])
+
+# 0. TAB BM25 SEARCH
+with tab_bm25:
+    st.subheader("🔎 Tìm Kiếm Từ Khóa BM25 Trên Toàn Bộ Kho Dữ Liệu")
+    bm25_q = st.text_input(
+        "Nhập từ khóa y khoa / câu hỏi lâm sàng cần tra cứu:",
+        value="xuất huyết giảm tiểu cầu",
+        key="bm25_search_query",
+    )
+    col_k, col_btn = st.columns([1, 2])
+    with col_k:
+        bm25_top_k = st.slider("Số lượng kết quả (Top K):", min_value=3, max_value=25, value=5, step=1)
+    with col_btn:
+        st.write("")
+        st.write("")
+        run_bm25 = st.button("🚀 Tìm Kiếm Bằng BM25s", type="primary")
+
+    if run_bm25 or bm25_q.strip():
+        import time
+
+        with st.spinner("Đang tìm kiếm qua memory-mapped BM25s..."):
+            bm25_retriever = get_bm25_index()
+            t0 = time.time()
+            bm25_results = bm25_retriever.search(query=bm25_q.strip(), top_k=bm25_top_k)
+            bm25_elapsed = (time.time() - t0) * 1000
+
+        st.success(f"Tìm thấy **{len(bm25_results)} chunks** phù hợp trong **{bm25_elapsed:.1f} ms**!")
+
+        for r_idx, (cid, score, meta) in enumerate(bm25_results, 1):
+            did = meta.get("doc_id", "N/A")
+            d_title = meta.get("title", f"Document #{did}")
+            d_lang = meta.get("lang", "vi").upper()
+            d_text = meta.get("chunk_text", "").strip()
+            d_words = len(d_text.split())
+
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div class='chunk-card' style='border-left-color: #2563eb;'>
+                        <div class='chunk-header' style='color: #1d4ed8;'>
+                            <span>#{r_idx} | Doc ID: <b>{did}</b> <span class='badge badge-blue'>{d_lang}</span></span>
+                            <span>BM25 Score: <b>{score:.2f}</b> | Chunk ID: {cid} ({len(d_text)} ký tự, {d_words} từ)</span>
+                        </div>
+                        <h4 style='margin: 4px 0 8px 0; color: #0f172a;'>{d_title}</h4>
+                        <div class='chunk-body'>{d_text}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                col_load, _ = st.columns([2, 5])
+                with col_load:
+                    if st.button(f"👉 Mở Toàn Văn Document #{did}", key=f"open_doc_{cid}_{r_idx}"):
+                        loaded = load_crawled_doc_by_id(did)
+                        if loaded:
+                            st.session_state.current_doc = loaded
+                            st.rerun()
 
 # 1. TAB COMPARE (SIDE-BY-SIDE)
 with tab_compare:

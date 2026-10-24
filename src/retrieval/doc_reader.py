@@ -344,3 +344,110 @@ def display_random_crawled_doc(
     """
     display(HTML(html))
 
+
+_CACHED_BM25_INDEX = None
+
+
+def get_cached_bm25_index(
+    indices_dir: str | Path = "data/indices",
+    chunks_meta_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+):
+    """Singleton cached loader for BM25s sparse index."""
+    global _CACHED_BM25_INDEX
+    if _CACHED_BM25_INDEX is None:
+        from src.retrieval.sparse_index import SparseIndex
+
+        _CACHED_BM25_INDEX = SparseIndex.load(
+            directory=indices_dir,
+            fallback_meta_dir=indices_dir,
+            chunks_meta_path=chunks_meta_path,
+        )
+    return _CACHED_BM25_INDEX
+
+
+def search_bm25_interactive(
+    query: str,
+    top_k: int = 5,
+    indices_dir: str | Path = "data/indices",
+    chunks_meta_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+) -> list[dict[str, Any]]:
+    """Performs fast BM25 search and renders interactive HTML results in Jupyter.
+
+    Args:
+        query: Search keywords or clinical sentence.
+        top_k: Number of candidate chunks to return.
+
+    Returns:
+        List of candidate dictionaries.
+    """
+    import time
+
+    t0 = time.time()
+    bm25_idx = get_cached_bm25_index(indices_dir=indices_dir, chunks_meta_path=chunks_meta_path)
+    raw_results = bm25_idx.search(query=query, top_k=top_k)
+    elapsed_ms = (time.time() - t0) * 1000
+
+    results_data = []
+    cards_html = ""
+
+    for rank, (cid, score, meta) in enumerate(raw_results, 1):
+        did = meta.get("doc_id", "N/A")
+        title = meta.get("title", f"Document #{did}")
+        lang = meta.get("lang", "vi").upper()
+        text = meta.get("chunk_text", "").strip()
+
+        results_data.append({
+            "rank": rank,
+            "chunk_id": cid,
+            "doc_id": did,
+            "score": score,
+            "title": title,
+            "lang": lang,
+            "chunk_text": text,
+        })
+
+        safe_text = (
+            text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        )
+
+        cards_html += f"""
+        <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-left:5px solid #2563eb; border-radius:6px; padding:14px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,0.05);'>
+            <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;'>
+                <div>
+                    <span style='background:#2563eb; color:white; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px;'>#{rank}</span>
+                    <span style='font-size:12px; font-weight:bold; color:#0f172a; margin-left:8px;'>Doc ID: <b>{did}</b></span>
+                    <span style='background:#0d6efd; color:white; font-size:11px; padding:1px 6px; border-radius:3px; margin-left:6px;'>{lang}</span>
+                </div>
+                <div>
+                    <span style='background:#fef3c7; color:#92400e; font-size:12px; font-weight:bold; padding:2px 8px; border-radius:4px; border:1px solid #fde68a;'>BM25 Score: {score:.2f}</span>
+                    <span style='font-size:11px; color:#64748b; margin-left:6px;'>Chunk ID: {cid}</span>
+                </div>
+            </div>
+            <h4 style='margin:6px 0; color:#1e293b; font-size:14px; font-weight:600;'>{title}</h4>
+            <div style='font-size:13.5px; color:#334155; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; word-break:break-word;'>
+                {safe_text}
+            </div>
+            <div style='margin-top:8px; font-size:11px; color:#64748b;'>
+                👉 Để xem toàn văn tài liệu này, chạy: <code style='background:#e2e8f0; padding:2px 6px; border-radius:3px; color:#0f172a;'>display_document({did})</code>
+            </div>
+        </div>
+        """
+
+    header_html = f"""
+    <div style='border:1px solid #cbd5e1; border-radius:8px; padding:16px; margin:16px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'>
+        <div style='border-bottom:1px solid #e2e8f0; padding-bottom:10px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;'>
+            <div>
+                <h3 style='margin:0; color:#1d4ed8;'>🔎 Kết Quả Tìm Kiếm BM25: <span style='color:#0f172a;'>"{query}"</span></h3>
+                <div style='font-size:12px; color:#64748b; margin-top:4px;'>Tìm thấy <b>{len(results_data)}</b> chunks phù hợp trong <b>{elapsed_ms:.1f} ms</b> (qua memory-mapped BM25s)</div>
+            </div>
+        </div>
+        {cards_html if cards_html else "<div style='color:#64748b; font-style:italic;'>Không tìm thấy kết quả phù hợp nào cho từ khóa này.</div>"}
+    </div>
+    """
+    display(HTML(header_html))
+    return results_data
+
+
