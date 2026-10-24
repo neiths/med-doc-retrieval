@@ -42,14 +42,15 @@ BM25S_FILES = [
     ("indices/bm25s_metadata.json", "data/indices/bm25s_metadata.json"),
 ]
 
+ENRICHED_FILES = [
+    ("processed/queries_enriched.jsonl", "data/processed/queries_enriched.jsonl"),
+]
+
 
 def clean_old_indices(indices_dir: Path):
-    logger.info(f"Cleaning old index files in {indices_dir}...")
+    logger.info(f"Cleaning obsolete/incompatible index files in {indices_dir}...")
     patterns = [
         "bm25_index.pkl",
-        "dense_index.faiss",
-        "dense_metadata.json",
-        "chunks_meta.sqlite",
     ]
     for pat in patterns:
         target = indices_dir / pat
@@ -57,22 +58,22 @@ def clean_old_indices(indices_dir: Path):
             size_mb = target.stat().st_size / (1024 * 1024)
             logger.info(f"Removing old file: {target.name} ({size_mb:.2f} MB)")
             target.unlink()
-    logger.info("Old index files cleaned successfully.")
+    logger.info("Obsolete index files cleaned.")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--mode",
-        choices=["sq8", "full", "all"],
-        default="sq8",
-        help="Which index package to download (default: sq8).",
+        choices=["sq8", "hybrid", "bm25s", "full", "all"],
+        default="hybrid",
+        help="Which index package to download (sq8, hybrid, bm25s, full, all). Default: hybrid.",
     )
     parser.add_argument(
         "--clean-old",
         action="store_true",
-        default=True,
-        help="Remove outdated local indices before downloading.",
+        default=False,
+        help="Remove outdated legacy pickle indices before downloading.",
     )
     parser.add_argument(
         "--bucket-id",
@@ -98,10 +99,14 @@ def main():
     files_to_sync = []
     if args.mode == "sq8":
         files_to_sync = SQ8_FILES
+    elif args.mode == "bm25s":
+        files_to_sync = BM25S_FILES + ENRICHED_FILES
+    elif args.mode == "hybrid":
+        files_to_sync = SQ8_FILES + BM25S_FILES + ENRICHED_FILES
     elif args.mode == "full":
         files_to_sync = FULL_FILES
     elif args.mode == "all":
-        files_to_sync = SQ8_FILES + FULL_FILES + BM25S_FILES
+        files_to_sync = SQ8_FILES + FULL_FILES + BM25S_FILES + ENRICHED_FILES
 
     # Filter out files that already exist and are non-empty
     needed_files = []
