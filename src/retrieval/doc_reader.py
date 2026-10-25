@@ -778,4 +778,169 @@ def display_multistage_search(
     display(HTML(main_html))
 
 
+_CACHED_CATALOG = None
+
+
+def get_domains_catalog(parquet_dir: str | Path = "data/processed/parquet_corpus"):
+    """Scans corpus and returns a aggregated DataFrame with domains, language, counts, and length."""
+    global _CACHED_CATALOG
+    if _CACHED_CATALOG is not None:
+        return _CACHED_CATALOG
+
+    import pandas as pd
+    import pyarrow.dataset as ds
+
+    p_dir = Path(parquet_dir)
+    if not p_dir.exists():
+        return pd.DataFrame()
+
+    dataset = ds.dataset(p_dir, format="parquet")
+    scanner = dataset.scanner(columns=["domain", "lang", "char_count", "title"])
+    table = scanner.to_table()
+    df = table.to_pandas()
+
+    cat = (
+        df.groupby(["domain", "lang"])
+        .agg(
+            article_count=("domain", "count"),
+            avg_char_length=("char_count", "mean"),
+            sample_title=("title", "first"),
+        )
+        .reset_index()
+        .sort_values(by="article_count", ascending=False)
+    )
+    _CACHED_CATALOG = cat
+    return cat
+
+
+def get_documents_by_domain(
+    domain: str,
+    limit: int = 20,
+    offset: int = 0,
+    keyword_filter: str = "",
+    parquet_dir: str | Path = "data/processed/parquet_corpus",
+) -> list[dict[str, Any]]:
+    """Fetches full original raw documents belonging to a specific domain."""
+    import pyarrow.dataset as ds
+
+    p_dir = Path(parquet_dir)
+    if not p_dir.exists():
+        return []
+
+    dataset = ds.dataset(p_dir, format="parquet")
+    filter_expr = ds.field("domain") == domain
+    scanner = dataset.scanner(
+        columns=["doc_id", "title", "text", "url", "lang", "domain", "char_count"],
+        filter=filter_expr,
+    )
+
+    batch_docs = []
+    # Read batches
+    count = 0
+    matched = 0
+    kw = keyword_filter.strip().lower()
+
+    for batch in scanner.to_batches():
+        rows = batch.to_pylist()
+        for r in rows:
+            if kw and (kw not in r.get("title", "").lower() and kw not in r.get("text", "").lower()):
+                continue
+            if count >= offset:
+                batch_docs.append(r)
+                matched += 1
+                if matched >= limit:
+                    return batch_docs
+            count += 1
+
+    return batch_docs
+
+
+def get_random_doc_by_domain(
+    domain: str,
+    parquet_dir: str | Path = "data/processed/parquet_corpus",
+) -> dict[str, Any] | None:
+    """Picks a random raw document from the specified domain."""
+    import random
+    import pyarrow.dataset as ds
+
+    p_dir = Path(parquet_dir)
+    if not p_dir.exists():
+        return None
+
+    dataset = ds.dataset(p_dir, format="parquet")
+    filter_expr = ds.field("domain") == domain
+    scanner = dataset.scanner(
+        columns=["doc_id", "title", "text", "url", "lang", "domain", "char_count"],
+        filter=filter_expr,
+    )
+
+    # Fast reservoir sampling (sample 1)
+    chosen = None
+    seen = 0
+    for batch in scanner.to_batches():
+        rows = batch.to_pylist()
+        for r in rows:
+            seen += 1
+            if random.random() < (1.0 / seen):
+                chosen = r
+    return chosen
+
+
+def display_raw_document(
+    doc: dict[str, Any],
+    max_height: int = 650,
+) -> None:
+    """Renders full raw original document in clean HTML with dark/light mode compatibility."""
+    if not doc:
+        display(HTML("<b style='color:#dc2626;'>Không tìm thấy văn bản!</b>"))
+        return
+
+    import html as html_lib
+
+    title = html_lib.escape(doc.get("title") or f"Tài liệu #{doc.get('doc_id')}")
+    raw_text = html_lib.escape(doc.get("text") or doc.get("raw_text") or "")
+    url = doc.get("url") or ""
+    domain = doc.get("domain") or "N/A"
+    lang = (doc.get("lang") or "vi").upper()
+    doc_id = str(doc.get("doc_id", "N/A"))
+    char_count = len(raw_text)
+    word_count = len(raw_text.split())
+
+    url_html = (
+        f"<a href='{url}' target='_blank' style='color:#2563eb; text-decoration:none;'>{url[:80]}... ↗</a>"
+        if url
+        else "<span style='color:#64748b;'>Không có URL</span>"
+    )
+
+    html_out = f"""
+    <div style='border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:14px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 1px 3px rgba(0,0,0,0.05);'>
+        <!-- Header -->
+        <div style='border-bottom:2px solid #e2e8f0; padding-bottom:12px; margin-bottom:14px;'>
+            <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;'>
+                <div>
+                    <span style='background:#2563eb; color:white; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px;'>Domain: {domain}</span>
+                    <span style='background:#059669; color:white; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px; margin-left:6px;'>{lang}</span>
+                    <span style='background:#f1f5f9; color:#0f172a; font-size:11px; font-weight:bold; padding:2px 8px; border-radius:4px; margin-left:6px;'>Doc ID: {doc_id}</span>
+                </div>
+                <div style='font-size:12px; color:#64748b;'>
+                    <b>{char_count:,}</b> ký tự | <b>{word_count:,}</b> từ
+                </div>
+            </div>
+            <h3 style='margin:6px 0; color:#0f172a !important;'>{title}</h3>
+            <div style='font-size:12px;'>🔗 Link nguồn: {url_html}</div>
+        </div>
+
+        <!-- Document Body -->
+        <div>
+            <div style='font-size:12px; font-weight:bold; color:#475569; margin-bottom:6px;'>📜 TOÀN VĂN NGUYÊN BẢN (CHƯA PHÂN ĐOẠN CHUNK):</div>
+            <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-radius:6px; padding:16px; font-size:14px; line-height:1.75; white-space:pre-wrap !important; word-break:break-word !important; word-wrap:break-word !important; max-height:{max_height}px; overflow-y:auto;'>
+{raw_text}
+            </div>
+        </div>
+    </div>
+    """
+    display(HTML(html_out))
+
+
+
 
