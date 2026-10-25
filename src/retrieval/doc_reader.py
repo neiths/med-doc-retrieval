@@ -942,5 +942,49 @@ def display_raw_document(
     display(HTML(html_out))
 
 
+def lookup_raw_doc_by_id(
+    doc_id: int | str,
+    parquet_dir: str | Path = "data/processed/parquet_corpus",
+    sqlite_path: str | Path = "data/indices/chunks_meta_slim.sqlite",
+) -> dict[str, Any] | None:
+    """Looks up full raw document by doc_id from parquet corpus, with fallback to SQLite metadata."""
+    import pyarrow.dataset as ds
+
+    try:
+        target_id = int(str(doc_id).strip())
+    except ValueError:
+        return None
+
+    # 1. Look up in Parquet Corpus
+    p_dir = Path(parquet_dir)
+    if p_dir.exists():
+        dataset = ds.dataset(p_dir, format="parquet")
+        scanner = dataset.scanner(
+            columns=["doc_id", "title", "text", "url", "lang", "domain", "char_count"],
+            filter=(ds.field("doc_id") == target_id),
+        )
+        rows = scanner.to_table().to_pylist()
+        if rows:
+            return rows[0]
+
+    # 2. Fallback to SQLite Metadata
+    s_path = Path(sqlite_path)
+    if s_path.exists():
+        info = get_document_and_chunks(target_id, db_path=s_path)
+        if info:
+            return {
+                "doc_id": target_id,
+                "title": info.get("title", f"Document #{target_id}"),
+                "text": info.get("full_text", ""),
+                "url": "",
+                "lang": info.get("lang", "vi"),
+                "domain": "Internal SQLite DB",
+                "char_count": len(info.get("full_text", "")),
+            }
+
+    return None
+
+
+
 
 
