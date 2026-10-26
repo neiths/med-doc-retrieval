@@ -88,6 +88,8 @@ class SparseIndex:
 
                 cid_str = str(self.chunk_ids[idx]) if idx < len(self.chunk_ids) else str(idx)
                 row = None
+                has_url = getattr(self, "_has_url", False)
+                select_cols = "doc_id, chunk_id, chunk_text, title, lang, url" if has_url else "doc_id, chunk_id, chunk_text, title, lang"
 
                 # 1. If format is "{doc_id}__c{offset}"
                 if "__c" in cid_str:
@@ -96,7 +98,7 @@ class SparseIndex:
                         int_doc_id = int(doc_part)
                         chunk_offset = int(off_part)
                         doc_rows = cur.execute(
-                            "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
+                            f"SELECT {select_cols} FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
                             (int_doc_id,),
                         ).fetchall()
                         if doc_rows:
@@ -108,7 +110,7 @@ class SparseIndex:
                 if not row:
                     try:
                         row = cur.execute(
-                            f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?",
+                            f"SELECT {select_cols} FROM chunks WHERE {id_col} = ?",
                             (int(cid_str) if cid_str.isdigit() else cid_str,),
                         ).fetchone()
                     except Exception:
@@ -117,7 +119,7 @@ class SparseIndex:
                 if not row and id_col != "rowid":
                     try:
                         row = cur.execute(
-                            "SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE rowid = ?",
+                            f"SELECT {select_cols} FROM chunks WHERE rowid = ?",
                             (int(idx) + 1,),
                         ).fetchone()
                     except Exception:
@@ -133,6 +135,7 @@ class SparseIndex:
                         "chunk_text": raw_c,
                         "title": row[3],
                         "lang": row[4],
+                        "url": (row[5] or "") if has_url else "",
                     }
                     results.append((row[1], float(score), meta))
                 else:
@@ -285,7 +288,8 @@ class SparseIndex:
                 cur = idx._sqlite_conn.cursor()
                 cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
                 idx._id_col = "idx" if "idx" in cols else ("chunk_id" if "chunk_id" in cols else "rowid")
-                logger.info(f"Connected to SQLite metadata: {sqlite_file} (key column: {idx._id_col})")
+                idx._has_url = "url" in cols
+                logger.info(f"Connected to SQLite metadata: {sqlite_file} (key column: {idx._id_col}, has_url: {idx._has_url})")
                 if not idx.chunk_ids:
                     rows = cur.execute(f"SELECT chunk_id FROM chunks ORDER BY {idx._id_col}").fetchall()
                     idx.chunk_ids = [r[0] for r in rows]

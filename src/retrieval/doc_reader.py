@@ -31,32 +31,41 @@ def get_document_and_chunks(
     if db_path.exists():
         conn = sqlite3.connect(db_path, check_same_thread=False)
         cur = conn.cursor()
+        cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
+        has_url = "url" in cols
+        select_sql = (
+            "SELECT chunk_id, title, url, chunk_text, lang FROM chunks WHERE doc_id = ? ORDER BY chunk_id"
+            if has_url
+            else "SELECT chunk_id, title, chunk_text, lang FROM chunks WHERE doc_id = ? ORDER BY chunk_id"
+        )
         rows = []
         try:
-            cur.execute(
-                "SELECT chunk_id, title, chunk_text, lang FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
-                (int(doc_id),),
-            )
+            cur.execute(select_sql, (int(doc_id),))
             rows = cur.fetchall()
         except Exception:
             pass
 
         if not rows:
-            cur.execute(
-                "SELECT chunk_id, title, chunk_text, lang FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
-                (str(doc_id),),
-            )
+            cur.execute(select_sql, (str(doc_id),))
             rows = cur.fetchall()
         conn.close()
 
         if rows:
             title = rows[0][1] or f"Document #{doc_id}"
-            lang = rows[0][3] or "vi"
-            chunks = [{"chunk_id": r[0], "chunk_text": r[2]} for r in rows]
+            if has_url:
+                url = rows[0][2] or ""
+                chunks = [{"chunk_id": r[0], "chunk_text": r[3]} for r in rows]
+                lang = rows[0][4] or "vi"
+            else:
+                url = ""
+                chunks = [{"chunk_id": r[0], "chunk_text": r[2]} for r in rows]
+                lang = rows[0][3] or "vi"
+
             full_text = "\n\n".join([c["chunk_text"] for c in chunks])
             return {
                 "doc_id": doc_id,
                 "title": title,
+                "url": url,
                 "lang": lang,
                 "source": "sqlite_corpus",
                 "total_chunks": len(chunks),
@@ -74,9 +83,12 @@ def get_document_and_chunks(
                 item = json.loads(line)
                 if str(item.get("doc_id")) == str(doc_id) or str(item.get("pmid")) == str(doc_id):
                     text = item.get("full_text") or item.get("abstract") or ""
+                    pmid = item.get("pmid") or doc_id
+                    url = item.get("url") or f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                     return {
                         "doc_id": doc_id,
                         "title": item.get("title", f"PubMed Article #{doc_id}"),
+                        "url": url,
                         "lang": "en",
                         "source": "pubmed_cache",
                         "total_chunks": 1,
@@ -125,12 +137,20 @@ def display_document(
             """
         chunks_html += "</div>"
 
+    url = doc.get("url") or ""
+    url_html = (
+        f"<div style='font-size:12px; margin-top:4px;'>🔗 URL Nguồn: <a href='{url}' target='_blank' style='color:#0d6efd; text-decoration:none;'>{url} ↗</a></div>"
+        if url
+        else ""
+    )
+
     html = f"""
     <div style='border:1px solid #cbd5e1; border-radius:8px; padding:18px; margin:16px 0; background:#ffffff !important; color:#0f172a !important; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow:0 2px 8px rgba(0,0,0,0.08);'>
         <div style='border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:12px;'>
             <div style='font-size:13px; color:#475569 !important;'>📄 Document ID: <b style='color:#0f172a;'>{doc['doc_id']}</b> {lang_badge} {chunks_badge}</div>
             <h3 style='margin:8px 0 4px 0; color:#0f172a !important; line-height:1.4;'>{doc['title']}</h3>
-            <div style='font-size:12px; color:#64748b !important;'>Độ dài toàn văn: {len(doc['full_text']):,} ký tự | Nguồn: {doc['source']}</div>
+            {url_html}
+            <div style='font-size:12px; color:#64748b !important; margin-top:4px;'>Độ dài toàn văn: {len(doc['full_text']):,} ký tự | Nguồn: {doc['source']}</div>
         </div>
         {chunks_html}
     </div>
@@ -154,6 +174,8 @@ def print_document(
     print(separator)
     print(f"📄 DOC ID: {doc['doc_id']} | NGÔN NGỮ: {doc['lang'].upper()} | SỐ CHUNKS: {doc['total_chunks']}")
     print(f"TIÊU ĐỀ: {doc['title']}")
+    if doc.get("url"):
+        print(f"URL:     {doc['url']}")
     print(separator)
     for i, c in enumerate(doc["chunks"], 1):
         print(f"\n[Chunk #{i}/{doc['total_chunks']} - ID: {c['chunk_id']}]")
@@ -399,6 +421,7 @@ def search_bm25_interactive(
         title = meta.get("title", f"Document #{did}")
         lang = meta.get("lang", "vi").upper()
         text = meta.get("chunk_text", "").strip()
+        url = meta.get("url", "")
 
         results_data.append({
             "rank": rank,
@@ -406,6 +429,7 @@ def search_bm25_interactive(
             "doc_id": did,
             "score": score,
             "title": title,
+            "url": url,
             "lang": lang,
             "chunk_text": text,
         })
@@ -415,6 +439,12 @@ def search_bm25_interactive(
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\n", "<br>")
+        )
+
+        url_link = (
+            f"<div style='font-size:12px; margin-top:2px; margin-bottom:6px;'>🔗 URL: <a href='{url}' target='_blank' style='color:#0d6efd; text-decoration:none;'>{url} ↗</a></div>"
+            if url
+            else ""
         )
 
         cards_html += f"""
@@ -431,6 +461,7 @@ def search_bm25_interactive(
                 </div>
             </div>
             <h4 style='margin:6px 0; color:#1e293b; font-size:14px; font-weight:600;'>{title}</h4>
+            {url_link}
             <div style='font-size:13.5px; color:#334155; line-height:1.6; white-space:pre-wrap; word-wrap:break-word; word-break:break-word;'>
                 {safe_text}
             </div>
@@ -523,6 +554,7 @@ def search_multistage(
             "doc_id": meta.get("doc_id", "N/A"),
             "score": float(score),
             "title": meta.get("title", f"Document #{meta.get('doc_id')}"),
+            "url": meta.get("url", ""),
             "lang": meta.get("lang", "vi").upper(),
             "chunk_text": meta.get("chunk_text", "").strip(),
             "source": "DENSE",
@@ -543,6 +575,7 @@ def search_multistage(
             "doc_id": meta.get("doc_id", "N/A"),
             "score": float(score),
             "title": meta.get("title", f"Document #{meta.get('doc_id')}"),
+            "url": meta.get("url", ""),
             "lang": meta.get("lang", "vi").upper(),
             "chunk_text": meta.get("chunk_text", "").strip(),
             "source": "BM25",
@@ -574,6 +607,7 @@ def search_multistage(
             "chunk_id": cid,
             "doc_id": meta["doc_id"],
             "title": meta["title"],
+            "url": meta.get("url", ""),
             "lang": meta["lang"],
             "chunk_text": meta["chunk_text"],
             "rrf_score": score_rrf,
@@ -620,6 +654,7 @@ def search_multistage(
                 "chunk_id": item["chunk_id"],
                 "chunk_text": item["chunk_text"],
                 "title": item["title"],
+                "url": item.get("url", ""),
                 "rerank_score": item["rerank_score"],
             })
         if len(final_docs) >= top_k_docs:
@@ -669,13 +704,18 @@ def display_multistage_search(
 
     t = data["timing_ms"]
 
-    def make_card(rank, did, lang, score_badge, title, text, extra_info=""):
+    def make_card(rank, did, lang, score_badge, title, text, url="", extra_info=""):
         safe_text = (
             text[:200].replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\n", " ")
         ) + ("..." if len(text) > 200 else "")
+        url_link = (
+            f"<div style='font-size:11px; margin-top:2px; margin-bottom:4px;'>🔗 <a href='{url}' target='_blank' style='color:#0d6efd; text-decoration:none;'>{url[:75]}... ↗</a></div>"
+            if url
+            else ""
+        )
         return f"""
         <div style='background:#f8fafc !important; color:#0f172a !important; border:1px solid #cbd5e1; border-radius:6px; padding:10px; margin-bottom:8px;'>
             <div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;'>
@@ -686,7 +726,8 @@ def display_multistage_search(
                 </div>
                 <div>{score_badge}</div>
             </div>
-            <div style='font-size:12px; font-weight:600; color:#1e293b; margin-bottom:4px;'>{title}</div>
+            <div style='font-size:12px; font-weight:600; color:#1e293b; margin-bottom:2px;'>{title}</div>
+            {url_link}
             <div style='font-size:12px; color:#475569; line-height:1.5;'>{safe_text}</div>
             {f"<div style='font-size:11px; color:#64748b; margin-top:4px;'>{extra_info}</div>" if extra_info else ""}
         </div>
@@ -696,13 +737,13 @@ def display_multistage_search(
     d_html = ""
     for item in data["stage_1a_dense"][:dense_top_k]:
         score_badge = f"<span style='background:#dbeafe; color:#1e40af; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>Cos: {item['score']:.3f}</span>"
-        d_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"])
+        d_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], url=item.get("url", ""))
 
     # Stage 1B cards
     s_html = ""
     for item in data["stage_1b_bm25"][:sparse_top_k]:
         score_badge = f"<span style='background:#fef3c7; color:#92400e; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>BM25: {item['score']:.2f}</span>"
-        s_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"])
+        s_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], url=item.get("url", ""))
 
     # Stage 2 cards
     r_html = ""
@@ -711,7 +752,7 @@ def display_multistage_search(
         src_badge = f"<span style='background:{src_color}; color:white; font-size:10px; font-weight:bold; padding:1px 6px; border-radius:3px;'>{item['source']}</span>"
         score_badge = f"<span style='background:#f1f5f9; color:#0f172a; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>RRF: {item['rrf_score']:.4f}</span>"
         extra = f"Vị trí ban đầu: Dense #{item['dense_rank'] or '-'} | BM25 #{item['sparse_rank'] or '-'} | {src_badge}"
-        r_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], extra_info=extra)
+        r_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], url=item.get("url", ""), extra_info=extra)
 
     # Stage 3 cards
     ce_html = ""
@@ -721,7 +762,7 @@ def display_multistage_search(
         delta_badge = f"<span style='color:{delta_color}; font-weight:bold;'>({delta_str})</span>"
         score_badge = f"<span style='background:#dcfce7; color:#15803d; font-size:11px; font-weight:bold; padding:1px 6px; border-radius:3px;'>Logits: {item['rerank_score']:.2f}</span>"
         extra = f"RRF ban đầu: #{item['rrf_rank']} {delta_badge}"
-        ce_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], extra_info=extra)
+        ce_html += make_card(item["rank"], item["doc_id"], item["lang"], score_badge, item["title"], item["chunk_text"], url=item.get("url", ""), extra_info=extra)
 
     # Stage 4 summary
     final = data["stage_4_final"]
@@ -976,7 +1017,7 @@ def lookup_raw_doc_by_id(
                 "doc_id": target_id,
                 "title": info.get("title", f"Document #{target_id}"),
                 "text": info.get("full_text", ""),
-                "url": "",
+                "url": info.get("url", ""),
                 "lang": info.get("lang", "vi"),
                 "domain": "Internal SQLite DB",
                 "char_count": len(info.get("full_text", "")),

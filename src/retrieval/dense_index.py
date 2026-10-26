@@ -72,13 +72,16 @@ class DenseIndex:
         if hasattr(self, "_sqlite_conn") and self._sqlite_conn is not None:
             cur = self._sqlite_conn.cursor()
             id_col = getattr(self, "_id_col", "chunk_id")
+            has_url = getattr(self, "_has_url", False)
+            sql = (
+                f"SELECT doc_id, chunk_id, chunk_text, title, lang, url FROM chunks WHERE {id_col} = ?"
+                if has_url
+                else f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?"
+            )
             for dist, idx_val in zip(distances[0], indices[0]):
                 if idx_val < 0 or idx_val >= self.index.ntotal:
                     continue
-                row = cur.execute(
-                    f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?",
-                    (int(idx_val),),
-                ).fetchone()
+                row = cur.execute(sql, (int(idx_val),)).fetchone()
                 if row:
                     raw_chunk = row[2] or ""
                     # Safeguard: if chunk text was polluted with Title header, clean it
@@ -96,6 +99,7 @@ class DenseIndex:
                         "contextual_text": ctx_text,
                         "title": row[3],
                         "lang": row[4],
+                        "url": (row[5] or "") if has_url else "",
                     }
                     results.append((row[1], float(dist), meta))
         else:
@@ -327,8 +331,9 @@ class DenseIndex:
             cur = idx._sqlite_conn.cursor()
             cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
             idx._id_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
+            idx._has_url = "url" in cols
             logger.info(
-                f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir} (key column: {idx._id_col})"
+                f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir} (key column: {idx._id_col}, has_url: {idx._has_url})"
             )
         elif meta_file.exists():
             with open(meta_file, encoding="utf-8") as f:
