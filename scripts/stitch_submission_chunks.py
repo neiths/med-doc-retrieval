@@ -1,12 +1,17 @@
 """Post-processing script to stitch adjacent and overlapping chunks in a submission.
 
+WARNING: The organizers now score chunk overlap bidirectionally: the token LCS must
+cover at least 40% of the gold chunk AND at least 40% of the predicted chunk. Merging
+adjacent chunks into 350-600 token passages raises the predicted-length requirement, so
+stitched submissions generally score worse. This script is kept for the legacy
+one-sided rule only and refuses to run without --force-legacy.
+
 Implements Adjacent Chunk Stitching (Window Expansion):
 1. For each query, groups predicted chunks by their doc_id.
 2. Identifies overlapping or contiguous chunks from the same document.
 3. Merges them seamlessly using longest suffix-prefix matching without text duplication.
 4. Expands chunk lengths from ~750 characters to ~1,400 - 2,500 characters (~350 - 600 tokens).
-5. Ensures predicted chunks cover >= 40% of the BTC ground-truth passage (token LCS length / gold token count).
-6. Preserves the official R2AI competition schema and creates a flat submission.zip.
+5. Preserves the official R2AI competition schema and creates a flat submission.zip.
 """
 
 import argparse
@@ -264,8 +269,23 @@ def main():
         default=3500,
         help="Maximum character length of a merged chunk (default: 3500).",
     )
+    parser.add_argument(
+        "--force-legacy",
+        action="store_true",
+        help=(
+            "Run despite the bidirectional LCS rule. Merged chunks must cover 40%% of the "
+            "merged length, which they usually do not."
+        ),
+    )
 
     args = parser.parse_args()
+
+    if not args.force_legacy:
+        raise SystemExit(
+            "Refusing to stitch: scoring now requires LCS >= 40% of BOTH the gold chunk and "
+            "the predicted chunk, so merged passages usually lose score. Re-run with "
+            "--force-legacy only if the one-sided rule is restored."
+        )
 
     if not args.input_file.exists():
         raise FileNotFoundError(f"Input file not found: {args.input_file}")

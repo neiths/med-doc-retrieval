@@ -12,6 +12,7 @@ from loguru import logger
 from pyvi import ViTokenizer
 
 from src.ingestion.cleaner import detect_language
+from src.retrieval.chunk_meta import ChunkMetaStore
 
 
 RE_WORDS = re.compile(r"\w+")
@@ -40,6 +41,7 @@ class SparseIndex:
         self.chunk_ids: list[str] = []
         self.chunk_metadata: list[dict[str, Any]] = []
         self._sqlite_conn = None
+        self.meta_store: ChunkMetaStore | None = None
 
     def build(self, chunks: list[dict[str, Any]], text_key: str = "chunk_text"):
         """Builds bm25s index from a list of chunk dicts in seconds."""
@@ -79,75 +81,27 @@ class SparseIndex:
         top_indices = res_indices[0].tolist()
         top_scores = scores[0].tolist()
 
-        if self._sqlite_conn is not None:
-            cur = self._sqlite_conn.cursor()
-            id_col = getattr(self, "_id_col", "chunk_id")
-            for idx, score in zip(top_indices, top_scores):
-                if score <= 0 or idx < 0 or idx >= len(self.chunk_ids):
-                    continue
-
-                cid_str = str(self.chunk_ids[idx]) if idx < len(self.chunk_ids) else str(idx)
-                row = None
-                has_url = getattr(self, "_has_url", False)
-                select_cols = "doc_id, chunk_id, chunk_text, title, lang, url" if has_url else "doc_id, chunk_id, chunk_text, title, lang"
-
-                # 1. If format is "{doc_id}__c{offset}"
-                if "__c" in cid_str:
-                    try:
-                        doc_part, off_part = cid_str.split("__c", 1)
-                        int_doc_id = int(doc_part)
-                        chunk_offset = int(off_part)
-                        doc_rows = cur.execute(
-                            f"SELECT {select_cols} FROM chunks WHERE doc_id = ? ORDER BY chunk_id",
-                            (int_doc_id,),
-                        ).fetchall()
-                        if doc_rows:
-                            row = doc_rows[min(chunk_offset, len(doc_rows) - 1)]
-                    except Exception:
-                        pass
-
-                # 2. If not found or plain chunk_id / rowid
-                if not row:
-                    try:
-                        row = cur.execute(
-                            f"SELECT {select_cols} FROM chunks WHERE {id_col} = ?",
-                            (int(cid_str) if cid_str.isdigit() else cid_str,),
-                        ).fetchone()
-                    except Exception:
-                        pass
-
-                if not row and id_col != "rowid":
-                    try:
-                        row = cur.execute(
-                            f"SELECT {select_cols} FROM chunks WHERE rowid = ?",
-                            (int(idx) + 1,),
-                        ).fetchone()
-                    except Exception:
-                        pass
-
-                if row:
-                    raw_c = row[2] or ""
-                    if raw_c.startswith("Tiêu đề:") and "\nNội dung: " in raw_c:
-                        raw_c = raw_c.split("\nNội dung: ", 1)[-1].strip()
+        if self.meta_store is not None:
+            ranked = [
+                (idx, score)
+                for idx, score in zip(top_indices, top_scores)
+                if score > 0 and 0 <= idx < len(self.chunk_ids)
+            ]
+            cids = [str(self.chunk_ids[idx]) for idx, _ in ranked]
+            by_cid = self.meta_store.get_by_chunk_ids(cids)
+            for (idx, score), cid in zip(ranked, cids):
+                meta = by_cid.get(cid)
+                if meta is None:
                     meta = {
-                        "doc_id": row[0],
-                        "chunk_id": row[1],
-                        "chunk_text": raw_c,
-                        "title": row[3],
-                        "lang": row[4],
-                        "url": (row[5] or "") if has_url else "",
-                    }
-                    results.append((row[1], float(score), meta))
-                else:
-                    doc_id_guess = cid_str.split("__c")[0] if "__c" in cid_str else cid_str
-                    meta = {
-                        "doc_id": doc_id_guess,
-                        "chunk_id": cid_str,
+                        "doc_id": cid.split("__c")[0] if "__c" in cid else cid,
+                        "chunk_id": cid,
                         "chunk_text": "",
-                        "title": f"Document #{doc_id_guess}",
+                        "contextual_text": "",
+                        "title": "",
                         "lang": "vi",
+                        "url": "",
                     }
-                    results.append((cid_str, float(score), meta))
+                results.append((meta["chunk_id"], float(score), meta))
         else:
             for idx, score in zip(top_indices, top_scores):
                 if score <= 0 or idx < 0 or idx >= len(self.chunk_ids):
@@ -285,13 +239,14 @@ class SparseIndex:
 
             if sqlite_file is not None and sqlite_file.exists():
                 idx._sqlite_conn = sqlite3.connect(sqlite_file, check_same_thread=False)
-                cur = idx._sqlite_conn.cursor()
-                cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
-                idx._id_col = "idx" if "idx" in cols else ("chunk_id" if "chunk_id" in cols else "rowid")
-                idx._has_url = "url" in cols
+                idx.meta_store = ChunkMetaStore(idx._sqlite_conn)
+                idx._id_col = idx.meta_store.pos_col
+                idx._has_url = idx.meta_store.has_url
                 logger.info(f"Connected to SQLite metadata: {sqlite_file} (key column: {idx._id_col}, has_url: {idx._has_url})")
                 if not idx.chunk_ids:
-                    rows = cur.execute(f"SELECT chunk_id FROM chunks ORDER BY {idx._id_col}").fetchall()
+                    rows = idx._sqlite_conn.execute(
+                        f"SELECT chunk_id FROM chunks ORDER BY {idx._id_col}"
+                    ).fetchall()
                     idx.chunk_ids = [r[0] for r in rows]
 
             logger.info(f"Loaded bm25s sparse index ({len(idx.chunk_ids):,} chunks) via zero-copy mmap.")

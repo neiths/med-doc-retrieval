@@ -48,10 +48,12 @@ reranker:
   model_name: "BAAI/bge-reranker-v2-m3"  # Upgraded to Multilingual SOTA reranker recommended by VinUni mentor
   batch_size: 32            # 32 locally, can be 64 on Colab/Kaggle
   device: "auto"
-  top_k_chunks: 120         # Balanced for Macro F2 (Recall x4 weight)
-  top_k_docs: 60            # High recall doc coverage
+  top_k_chunks: 150         # F2 = 5h/(4G+n): an extra chunk pays off at >0.3% match rate
+  top_k_docs: 150           # Gold sets average ~71 docs; pool holds 150-225 unique docs, so the tail is nearly free recall
   score_threshold: -8.0     # Relaxed to capture maximum Recall for Macro F2
   max_chunks_per_doc: 3     # Balanced coverage: 2-3 chunks per doc to prevent single-doc flooding
+  expand_top_docs: 30       # Re-score every chunk of the top-N docs (fixes intra-doc localization)
+  expand_max_chunks_per_doc: 8  # Cap per expanded doc; longer docs keep chunks with best query-term overlap
 
 query_translation:
   enabled: true

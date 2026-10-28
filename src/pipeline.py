@@ -249,6 +249,7 @@ class MedicalRetrievalPipeline:
         try:
             self.sparse_index = SparseIndex.load(s_dir, fallback_meta_dir=d_dir, chunks_meta_path=meta_p)
             if self.dense_index is not None and self.sparse_index is not None:
+                self._share_chunk_meta_store()
                 self.hybrid_retriever = HybridRetriever(
                     dense_index=self.dense_index,
                     sparse_index=self.sparse_index,
@@ -263,6 +264,18 @@ class MedicalRetrievalPipeline:
         except Exception as e:
             logger.warning(f"Failed to load SparseIndex ({type(e).__name__}: {e}). Operating in dense-only mode.")
         logger.info("Indices loading process completed.")
+
+    def _share_chunk_meta_store(self):
+        """Reuses one metadata store when dense and sparse read the same SQLite file."""
+        dense_store = getattr(self.dense_index, "meta_store", None)
+        sparse_store = getattr(self.sparse_index, "meta_store", None)
+        if dense_store is None or sparse_store is None:
+            return
+        dense_db = self.dense_index._sqlite_conn.execute("PRAGMA database_list").fetchone()[2]
+        sparse_db = self.sparse_index._sqlite_conn.execute("PRAGMA database_list").fetchone()[2]
+        if dense_db and dense_db == sparse_db:
+            self.sparse_index.meta_store = dense_store
+            logger.info("Shared chunk metadata store between dense and sparse indices.")
 
     def search_query(self, query: str) -> dict[str, Any]:
         """Performs end-to-end retrieval for a single query across VI, ZH, and EN."""
@@ -417,6 +430,15 @@ class MedicalRetrievalPipeline:
             return {"relevant_docs": [], "relevant_chunks": []}
 
         if self.reranker and self.config.reranker.enabled:
+            expand_top_docs = getattr(self.config.reranker, "expand_top_docs", 0)
+            expand_provider = None
+            has_meta = self.dense_index is not None and self.dense_index.meta_store is not None
+            if expand_top_docs > 0 and has_meta:
+                def expand_provider(doc_ids, max_per_doc=8):
+                    return self.dense_index.get_doc_chunks(
+                        doc_ids, query=query, max_per_doc=max_per_doc
+                    )
+
             doc_ids, relevant_chunks = self.reranker.rerank(
                 query=query,
                 candidates=all_candidates,
@@ -424,6 +446,11 @@ class MedicalRetrievalPipeline:
                 top_k_docs=self.config.reranker.top_k_docs,
                 score_threshold=self.config.reranker.score_threshold,
                 max_chunks_per_doc=getattr(self.config.reranker, "max_chunks_per_doc", 2),
+                expand_provider=expand_provider,
+                expand_top_docs=expand_top_docs,
+                expand_max_chunks_per_doc=getattr(
+                    self.config.reranker, "expand_max_chunks_per_doc", 8
+                ),
             )
 
         else:

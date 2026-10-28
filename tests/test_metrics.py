@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.evaluation.metrics import compute_prf, evaluate_predictions
+from src.evaluation.metrics import compute_chunk_prf, compute_prf, evaluate_predictions, lcs_length
 
 
 def test_compute_prf_basic():
@@ -110,3 +110,48 @@ def test_chunk_containment_and_overlap():
         chunk_match_mode="exact",
     )
     assert exact_res["macro_chunk_f2"] == 0.0
+
+
+def test_lcs_length_matches_bruteforce():
+    def brute(a, b):
+        m = len(b)
+        prev = [0] * (m + 1)
+        for x in a:
+            cur = [0] * (m + 1)
+            for j in range(1, m + 1):
+                cur[j] = prev[j - 1] + 1 if x == b[j - 1] else max(prev[j], cur[j - 1])
+            prev = cur
+        return prev[m]
+
+    import random
+
+    for _ in range(200):
+        a = [random.choice("abcde") for _ in range(random.randint(0, 12))]
+        b = [random.choice("abcde") for _ in range(random.randint(0, 12))]
+        assert lcs_length(a, b) == brute(a, b)
+
+
+def test_overlap_accepts_prediction_inside_gold():
+    gold = "one two three four five six seven eight nine ten"
+    pred = "three four five six seven"
+    p, r, _ = compute_chunk_prf([("d", pred)], [("d", gold)])
+    assert (p, r) == (1.0, 1.0)
+
+
+def test_overlap_rejects_prediction_longer_than_2_5x_gold():
+    gold = "one two three four five"
+    pred = gold + " " + " ".join(f"noise{i}" for i in range(8))
+    p, r, _ = compute_chunk_prf([("d", pred)], [("d", gold)])
+    assert (p, r) == (0.0, 0.0)
+
+
+def test_overlap_rejects_prediction_covering_too_little_gold():
+    gold = "one two three four five six seven eight nine ten"
+    pred = "one two"
+    p, r, _ = compute_chunk_prf([("d", pred)], [("d", gold)])
+    assert (p, r) == (0.0, 0.0)
+
+
+def test_overlap_ignores_chunks_from_other_documents():
+    p, r, _ = compute_chunk_prf([("docA", "one two three")], [("docB", "one two three")])
+    assert (p, r) == (0.0, 0.0)

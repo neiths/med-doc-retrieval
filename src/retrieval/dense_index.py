@@ -8,6 +8,8 @@ import faiss
 import numpy as np
 from loguru import logger
 
+from src.retrieval.chunk_meta import ChunkMetaStore
+
 
 class DenseIndex:
     """Vector index using FAISS IndexFlatIP (Inner Product on normalized vectors = Cosine Sim)."""
@@ -17,6 +19,7 @@ class DenseIndex:
         self.index = faiss.IndexFlatIP(dimension)
         self.chunk_ids: list[str] = []
         self.chunk_metadata: list[dict[str, Any]] = []
+        self.meta_store: ChunkMetaStore | None = None
 
     def add(
         self,
@@ -69,39 +72,17 @@ class DenseIndex:
         distances, indices = self.index.search(q_vec, k)
 
         results = []
-        if hasattr(self, "_sqlite_conn") and self._sqlite_conn is not None:
-            cur = self._sqlite_conn.cursor()
-            id_col = getattr(self, "_id_col", "chunk_id")
-            has_url = getattr(self, "_has_url", False)
-            sql = (
-                f"SELECT doc_id, chunk_id, chunk_text, title, lang, url FROM chunks WHERE {id_col} = ?"
-                if has_url
-                else f"SELECT doc_id, chunk_id, chunk_text, title, lang FROM chunks WHERE {id_col} = ?"
-            )
-            for dist, idx_val in zip(distances[0], indices[0]):
-                if idx_val < 0 or idx_val >= self.index.ntotal:
-                    continue
-                row = cur.execute(sql, (int(idx_val),)).fetchone()
-                if row:
-                    raw_chunk = row[2] or ""
-                    # Safeguard: if chunk text was polluted with Title header, clean it
-                    if raw_chunk.startswith("Tiêu đề:") and "\nNội dung: " in raw_chunk:
-                        clean_text = raw_chunk.split("\nNội dung: ", 1)[-1].strip()
-                        ctx_text = raw_chunk
-                    else:
-                        clean_text = raw_chunk
-                        ctx_text = f"Tiêu đề: {row[3]}\nNội dung: {raw_chunk}" if row[3] else raw_chunk
-
-                    meta = {
-                        "doc_id": row[0],
-                        "chunk_id": row[1],
-                        "chunk_text": clean_text,
-                        "contextual_text": ctx_text,
-                        "title": row[3],
-                        "lang": row[4],
-                        "url": (row[5] or "") if has_url else "",
-                    }
-                    results.append((row[1], float(dist), meta))
+        if self.meta_store is not None:
+            valid = [
+                (float(dist), int(idx_val))
+                for dist, idx_val in zip(distances[0], indices[0])
+                if 0 <= idx_val < self.index.ntotal
+            ]
+            by_pos = self.meta_store.get_by_positions({pos for _, pos in valid})
+            for dist, pos in valid:
+                meta = by_pos.get(pos)
+                if meta is not None:
+                    results.append((meta["chunk_id"], dist, meta))
         else:
             for dist, idx in zip(distances[0], indices[0]):
                 if idx < 0 or idx >= len(self.chunk_ids):
@@ -114,6 +95,17 @@ class DenseIndex:
                 results.append((self.chunk_ids[idx], float(dist), m))
 
         return results
+
+    def get_doc_chunks(
+        self,
+        doc_ids: list[str],
+        query: str | None = None,
+        max_per_doc: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Returns every indexed chunk of the given documents."""
+        if self.meta_store is None:
+            return []
+        return self.meta_store.get_doc_chunks(doc_ids, query=query, max_per_doc=max_per_doc)
 
     def save(self, directory: Path | str):
         """Saves FAISS index and metadata to disk."""
@@ -174,21 +166,19 @@ class DenseIndex:
         sqlite_file = None
         if chunks_meta_path:
             p = Path(chunks_meta_path)
-            if p.exists() and p.suffix in [".sqlite", ".db"]:
+            if p.exists() and p.stat().st_size > 0 and p.suffix in [".sqlite", ".db"]:
                 sqlite_file = p
 
         if sqlite_file is None:
-            sqlite_file = (
-                load_dir / "chunks_meta_slim.sqlite"
-                if (load_dir / "chunks_meta_slim.sqlite").exists()
-                else (load_dir / "chunks_meta.sqlite")
-            )
-            if not sqlite_file.exists() and fallback_meta_dir:
+            slim = load_dir / "chunks_meta_slim.sqlite"
+            full = load_dir / "chunks_meta.sqlite"
+            sqlite_file = slim if (slim.exists() and slim.stat().st_size > 0) else full
+            if not (sqlite_file.exists() and sqlite_file.stat().st_size > 0) and fallback_meta_dir:
                 fb = Path(fallback_meta_dir)
-                if (fb / "chunks_meta_slim.sqlite").exists():
-                    sqlite_file = fb / "chunks_meta_slim.sqlite"
-                elif (fb / "chunks_meta.sqlite").exists():
-                    sqlite_file = fb / "chunks_meta.sqlite"
+                for cand in (fb / "chunks_meta_slim.sqlite", fb / "chunks_meta.sqlite"):
+                    if cand.exists() and cand.stat().st_size > 0:
+                        sqlite_file = cand
+                        break
 
         meta_file = (
             load_dir / "dense_metadata_sq8.json"
@@ -328,10 +318,9 @@ class DenseIndex:
 
         if sqlite_file.exists():
             idx._sqlite_conn = sqlite3.connect(sqlite_file, check_same_thread=False)
-            cur = idx._sqlite_conn.cursor()
-            cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
-            idx._id_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
-            idx._has_url = "url" in cols
+            idx.meta_store = ChunkMetaStore(idx._sqlite_conn)
+            idx._id_col = idx.meta_store.pos_col
+            idx._has_url = idx.meta_store.has_url
             logger.info(
                 f"Loaded FAISS dense index ({idx.index.ntotal:,} vectors) with SQLite metadata from {load_dir} (key column: {idx._id_col}, has_url: {idx._has_url})"
             )

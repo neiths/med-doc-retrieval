@@ -123,6 +123,18 @@ def main():
         default=None,
         help="Override max_chunks_per_doc (e.g. 3).",
     )
+    parser.add_argument(
+        "--expand-top-docs",
+        type=int,
+        default=None,
+        help="Re-score every chunk of the top N documents (0 disables).",
+    )
+    parser.add_argument(
+        "--expand-max-chunks-per-doc",
+        type=int,
+        default=None,
+        help="Max chunks fetched per expanded document (default 8).",
+    )
 
     args = parser.parse_args()
     setup_inference_env()
@@ -143,12 +155,18 @@ def main():
         config.reranker.top_k_docs = args.top_k_docs
     if args.max_chunks_per_doc is not None:
         config.reranker.max_chunks_per_doc = args.max_chunks_per_doc
+    if args.expand_top_docs is not None:
+        config.reranker.expand_top_docs = args.expand_top_docs
+    if args.expand_max_chunks_per_doc is not None:
+        config.reranker.expand_max_chunks_per_doc = args.expand_max_chunks_per_doc
 
     logger.info(
         f"Retrieval Settings: hybrid_top_k={config.retrieval.hybrid_top_k} | "
         f"top_k_chunks={config.reranker.top_k_chunks} | "
         f"top_k_docs={config.reranker.top_k_docs} | "
-        f"max_chunks_per_doc={getattr(config.reranker, 'max_chunks_per_doc', 2)}"
+        f"max_chunks_per_doc={getattr(config.reranker, 'max_chunks_per_doc', 2)} | "
+        f"expand_top_docs={config.reranker.expand_top_docs} | "
+        f"expand_max_chunks_per_doc={config.reranker.expand_max_chunks_per_doc}"
     )
 
     if args.disable_pubmed_network:

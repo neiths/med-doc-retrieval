@@ -1,5 +1,6 @@
 """Cross-encoder reranking module using BAAI/bge-reranker-large or bge-reranker-v2-m3."""
 
+from collections.abc import Callable
 from typing import Any
 
 import torch
@@ -86,6 +87,9 @@ class BGEReranker:
         top_k_docs: int = 5,
         score_threshold: float = -5.0,
         max_chunks_per_doc: int = 2,
+        expand_provider: Callable[[list[str], int], list[dict[str, Any]]] | None = None,
+        expand_top_docs: int = 0,
+        expand_max_chunks_per_doc: int = 8,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Reranks candidate chunks and extracts top relevant documents and chunks.
 
@@ -102,6 +106,10 @@ class BGEReranker:
             top_k_docs: Max unique documents to select.
             score_threshold: Minimum cross-encoder score filter.
             max_chunks_per_doc: Maximum number of chunks allowed per document.
+            expand_provider: Optional callable returning every indexed chunk of the given
+                documents. Enables a second scoring pass over passages that retrieval missed.
+            expand_top_docs: How many top-ranked documents to expand.
+            expand_max_chunks_per_doc: Cap on chunks fetched per expanded document.
 
         Returns:
             Tuple of (list of doc_ids, list of chunk dicts {"doc_id": ..., "chunk_text": ...})
@@ -121,6 +129,40 @@ class BGEReranker:
             return [], []
 
         valid_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
+
+        # Second pass: score every chunk of the top documents. Retrieval only returns a
+        # sample of a document's chunks, so the passage containing the answer is often
+        # never scored; this closes that gap for the documents we already trust.
+        if expand_provider is not None and expand_top_docs > 0:
+            provisional_docs: list[str] = []
+            seen_docs: set[str] = set()
+            for c in valid_candidates:
+                did = str(c["doc_id"])
+                if did not in seen_docs:
+                    seen_docs.add(did)
+                    provisional_docs.append(did)
+                if len(provisional_docs) >= expand_top_docs:
+                    break
+
+            extra = expand_provider(provisional_docs, expand_max_chunks_per_doc)
+            known = {(str(c["doc_id"]), c.get("chunk_text", "")) for c in valid_candidates}
+            fresh = []
+            for c in extra:
+                key = (str(c.get("doc_id")), c.get("chunk_text", ""))
+                if c.get("chunk_text") and key not in known:
+                    known.add(key)
+                    fresh.append(c)
+
+            if fresh:
+                extra_scores = self.compute_scores(
+                    [(query, c.get("contextual_text") or c["chunk_text"]) for c in fresh]
+                )
+                for c, score in zip(fresh, extra_scores):
+                    c["rerank_score"] = score
+                valid_candidates.extend(
+                    c for c in fresh if c["rerank_score"] >= score_threshold
+                )
+                valid_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
 
         # 1. Extract unique documents preserving order of highest chunk score up to top_k_docs
         doc_ids = []

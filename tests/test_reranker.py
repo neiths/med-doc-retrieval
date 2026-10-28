@@ -68,3 +68,59 @@ def test_two_pass_recall_safeguard_single_doc():
         "doc1 section C",
         "doc1 section D",
     ]
+
+
+def test_expansion_scores_unsampled_chunks_of_top_docs():
+    """A document's unretrieved passage can win once the whole document is rescored."""
+    reranker = BGEReranker(device="cpu")
+    candidates = [
+        {"doc_id": "doc1", "chunk_text": "retrieved but weak passage"},
+        {"doc_id": "doc2", "chunk_text": "other doc passage"},
+    ]
+    requested_docs = []
+
+    def provider(doc_ids, max_per_doc):
+        requested_docs.append((doc_ids, max_per_doc))
+        return [
+            {"doc_id": "doc1", "chunk_text": "the actual answer passage"},
+            {"doc_id": "doc1", "chunk_text": "retrieved but weak passage"},
+        ]
+
+    def fake_scores(pairs):
+        return [9.0 if "answer" in text else 0.5 for _, text in pairs]
+
+    reranker.compute_scores = fake_scores
+
+    doc_ids, chunks = reranker.rerank(
+        query="q",
+        candidates=candidates,
+        top_k_chunks=2,
+        top_k_docs=1,
+        score_threshold=0.0,
+        max_chunks_per_doc=2,
+        expand_provider=provider,
+        expand_top_docs=1,
+        expand_max_chunks_per_doc=8,
+    )
+
+    assert requested_docs == [(["doc1"], 8)]
+    assert doc_ids == ["doc1"]
+    assert chunks[0]["chunk_text"] == "the actual answer passage"
+    # The duplicate candidate must not be scored or emitted twice.
+    assert [c["chunk_text"] for c in chunks].count("retrieved but weak passage") == 1
+
+
+def test_expansion_disabled_by_default():
+    reranker = BGEReranker(device="cpu")
+    reranker.compute_scores = lambda pairs: [1.0 for _ in pairs]
+    called = []
+    doc_ids, chunks = reranker.rerank(
+        query="q",
+        candidates=[{"doc_id": "doc1", "chunk_text": "only passage"}],
+        top_k_chunks=1,
+        top_k_docs=1,
+        score_threshold=0.0,
+        expand_provider=lambda doc_ids, n: called.append(doc_ids) or [],
+    )
+    assert called == []
+    assert doc_ids == ["doc1"]
