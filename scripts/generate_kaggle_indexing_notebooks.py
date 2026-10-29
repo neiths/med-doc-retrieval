@@ -48,6 +48,7 @@ def make_notebook_1():
     # Cell 2: Git repo setup
     cells.append(nbf.v4.new_code_cell("""# 2. Thiết lập mã nguồn dự án
 import os
+import sys
 from pathlib import Path
 
 REPO_URL = "https://github.com/neiths/med-doc-retrieval.git"
@@ -63,7 +64,13 @@ else:
 
 %cd $PROJECT_DIR
 print("Commit đang dùng:")
-!git log -1 --oneline"""))
+!git log -1 --oneline
+
+# Kernel giữ module src.* đã import từ trước khi sync -> xóa cache để đọc code mới từ đĩa
+_stale = [n for n in list(sys.modules) if n == "src" or n.startswith("src.")]
+for _name in _stale:
+    del sys.modules[_name]
+print(f"Đã xóa {len(_stale)} module src.* khỏi cache")"""))
 
     # Cell 3: HF Token Authentication
     cells.append(nbf.v4.new_code_cell("""# 3. Cấu hình bảo mật Hugging Face Token
@@ -431,6 +438,7 @@ def make_notebook_2():
     # Cell 3: Setup repository
     cells.append(nbf.v4.new_code_cell("""# 3. Cập nhật mã nguồn
 import os
+import sys
 from pathlib import Path
 
 REPO_URL = "https://github.com/neiths/med-doc-retrieval.git"
@@ -446,7 +454,13 @@ else:
 
 %cd $PROJECT_DIR
 print("Commit đang dùng:")
-!git log -1 --oneline"""))
+!git log -1 --oneline
+
+# Kernel giữ module src.* đã import từ trước khi sync -> xóa cache để đọc code mới từ đĩa
+_stale = [n for n in list(sys.modules) if n == "src" or n.startswith("src.")]
+for _name in _stale:
+    del sys.modules[_name]
+print(f"Đã xóa {len(_stale)} module src.* khỏi cache")"""))
 
     # Cell 4: HF Token Auth
     cells.append(nbf.v4.new_code_cell("""# 4. Cấu hình Hugging Face Token an toàn
