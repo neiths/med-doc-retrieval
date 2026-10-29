@@ -25,3 +25,10 @@ def test_tokenize_english():
     assert "kidney" in tokens
     assert "stones" in tokens
     assert "obstruction" in tokens
+
+
+def test_chinese_bigrams_strip_all_whitespace_variants():
+    tokens = tokenize_multilingual("肾 结\u3000石\n\n的 治", lang="zh")
+    assert tokens[:4] == ["肾", "结", "石", "的"]
+    assert "结石" in tokens and "的治" in tokens
+    assert not any(t.isspace() for t in tokens)

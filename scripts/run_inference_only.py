@@ -44,6 +44,9 @@ def setup_inference_env():
         logger.info(
             f"Using GPU: {gpu_name} ({vram_gb:.1f} GB VRAM) | Allocated: {allocated_gb:.2f} GB | Reserved: {reserved_gb:.2f} GB"
         )
+        gpu_count = torch.cuda.device_count()
+        gpu_names = [torch.cuda.get_device_name(i) for i in range(gpu_count)]
+        logger.info(f"Visible CUDA devices: {gpu_count} -> {gpu_names}")
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_grad_enabled(False)

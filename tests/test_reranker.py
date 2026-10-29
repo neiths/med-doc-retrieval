@@ -145,3 +145,37 @@ def test_length_sorted_batches_cover_all_pairs_once():
     assert all(len(batch) <= 3 for batch in batches)
     lengths = [[len(pairs[i][1]) for i in batch] for batch in batches]
     assert lengths == [[5, 10, 20], [50, 100, 200], [1000]]
+
+
+def test_round_robin_deals_batches_to_every_device():
+    batches = [[0], [1], [2], [3], [4]]
+    assert BGEReranker._round_robin(batches, 2) == [[[0], [2], [4]], [[1], [3]]]
+    assert BGEReranker._round_robin(batches, 1) == [batches]
+
+
+class _FakeInputs(dict):
+    def to(self, device):
+        return self
+
+
+class _FakeTokenizer:
+    def __call__(self, texts, **kwargs):
+        return _FakeInputs(texts=list(texts))
+
+
+class _FakeModel:
+    def __call__(self, texts):
+        import torch
+
+        return type("Out", (), {"logits": torch.tensor([[float(len(t[1]))] for t in texts])})()
+
+
+def test_scores_reassemble_in_original_order_across_devices():
+    """Parallel workers write into their own index set; the merged list must match `pairs` order."""
+    reranker = BGEReranker(device="cpu", batch_size=3)
+    reranker._tokenizer = _FakeTokenizer()
+    reranker._models = [_FakeModel(), _FakeModel()]
+    reranker._devices = ["cpu", "cpu"]
+
+    pairs = [("q", "x" * n) for n in (7, 1, 40, 3, 25, 11, 90, 2)]
+    assert reranker.compute_scores(pairs) == [7.0, 1.0, 40.0, 3.0, 25.0, 11.0, 90.0, 2.0]

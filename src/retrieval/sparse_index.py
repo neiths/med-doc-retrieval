@@ -16,6 +16,7 @@ from src.retrieval.chunk_meta import ChunkMetaStore
 
 
 RE_WORDS = re.compile(r"\w+")
+RE_CJK = re.compile(r"[\u4e00-\u9fff]")
 
 
 def tokenize_multilingual(text: str, lang: str = "auto") -> list[str]:
@@ -23,12 +24,14 @@ def tokenize_multilingual(text: str, lang: str = "auto") -> list[str]:
     if not text:
         return []
 
-    text_lower = text.lower()
-    if lang == "zh" or (lang == "auto" and any("\u4e00" <= c <= "\u9fff" for c in text[:50])):
-        chars = [c for c in text_lower if not c.isspace()]
-        bigrams = [chars[i] + chars[i + 1] for i in range(len(chars) - 1)]
-        return chars + bigrams
-    return RE_WORDS.findall(text_lower)
+    if lang == "zh" or (lang == "auto" and RE_CJK.search(text[:50])):
+        # split()/join strips every Unicode space in C, and pairing the stripped string with
+        # itself avoids materializing an intermediate character list before the bigrams.
+        stripped = "".join(text.lower().split())
+        tokens = list(stripped)
+        tokens.extend([a + b for a, b in zip(stripped, stripped[1:])])
+        return tokens
+    return RE_WORDS.findall(text.lower())
 
 
 class SparseIndex:

@@ -1,6 +1,9 @@
 """Cross-encoder reranking module using BAAI/bge-reranker-large or bge-reranker-v2-m3."""
 
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -30,62 +33,108 @@ class BGEReranker:
             f"Initializing BGEReranker with model='{model_name}' on device='{self.device}', fp16={self.use_fp16}"
         )
         self._tokenizer = None
-        self._model = None
+        self._models: list[Any] = []
+        self._devices: list[str] = []
+        self._tokenizer_lock = threading.Lock()
+
+    def _resolve_devices(self) -> list[str]:
+        """Every visible GPU is used; one replica per device scores its own share of batches."""
+        if not torch.cuda.is_available() or "cuda" not in self.device:
+            return ["cpu"]
+        if self.device in ["cuda", "auto"]:
+            return [f"cuda:{i}" for i in range(torch.cuda.device_count())]
+        return [self.device]
 
     def _load_model(self):
-        if self._model is None or self._tokenizer is None:
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        if self._models:
+            return
 
-            logger.info(f"Loading reranker model weights from {self.model_name}...")
-            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            dtype = (
-                torch.float16 if (self.use_fp16 and torch.cuda.is_available()) else torch.float32
-            )
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-            target_device = self.device
-            if self.device in ["cuda", "auto"] and torch.cuda.device_count() > 1:
-                target_device = "cuda:1"
-                logger.info(
-                    f"Multi-GPU detected: Allocating BGE-Reranker to secondary GPU ({target_device})."
-                )
+        logger.info(f"Loading reranker model weights from {self.model_name}...")
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        dtype = torch.float16 if (self.use_fp16 and torch.cuda.is_available()) else torch.float32
 
-            self._model = AutoModelForSequenceClassification.from_pretrained(
+        self._devices = self._resolve_devices()
+        for device in self._devices:
+            model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
                 torch_dtype=dtype,
             )
-            self._model.to(target_device)
-            self._model.eval()
-            self.device = target_device
+            model.to(device)
+            model.eval()
+            self._models.append(model)
+
+        self.device = self._devices[0]
+        logger.info(
+            f"BGE-Reranker replicas ready on {self._devices} (fp16={dtype == torch.float16})."
+        )
 
     def _batches_by_length(self, pairs: list[tuple[str, str]]) -> list[list[int]]:
         """Groups pair indices by passage length so batches pad as little as possible."""
         order = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
         return [order[i : i + self.batch_size] for i in range(0, len(order), self.batch_size)]
 
+    @staticmethod
+    def _round_robin(items: list[Any], parts: int) -> list[list[Any]]:
+        """Deals batches across devices so each one gets a similar mix of short and long passages."""
+        return [items[i::parts] for i in range(parts)]
+
+    def _score_batches(
+        self,
+        pairs: list[tuple[str, str]],
+        batches: list[list[int]],
+        model: Any,
+        device: str,
+    ) -> dict[int, float]:
+        results: dict[int, float] = {}
+        device_ctx = torch.cuda.device(device) if device != "cpu" else nullcontext()
+        with device_ctx, torch.inference_mode():
+            for batch_idx in batches:
+                # One GPU thread tokenizes at a time; the other keeps its GPU busy meanwhile.
+                with self._tokenizer_lock:
+                    inputs = self._tokenizer(
+                        [pairs[i] for i in batch_idx],
+                        padding=True,
+                        truncation=True,
+                        max_length=512,
+                        return_tensors="pt",
+                    ).to(device)
+
+                outputs = model(**inputs)
+                for i, score in zip(batch_idx, outputs.logits.view(-1).float().cpu().tolist()):
+                    results[i] = score
+                del inputs, outputs
+        return results
+
     def compute_scores(self, pairs: list[tuple[str, str]]) -> list[float]:
-        """Computes cross-encoder relevance scores for (query, document/chunk) pairs."""
+        """Computes cross-encoder relevance scores for (query, document/chunk) pairs.
+
+        Batches are length-sorted, then dealt round-robin across every GPU replica and scored
+        concurrently, so a single process saturates both T4s without spawning subprocesses.
+        """
         if not pairs:
             return []
 
         self._load_model()
-        scores: list[float] = [0.0] * len(pairs)
+        batches = self._batches_by_length(pairs)
+        devices = self._devices
 
-        with torch.inference_mode():
-            for batch_idx in self._batches_by_length(pairs):
-                inputs = self._tokenizer(
-                    [pairs[i] for i in batch_idx],
-                    padding=True,
-                    truncation=True,
-                    max_length=512,
-                    return_tensors="pt",
-                ).to(self.device)
+        if len(devices) == 1:
+            partials = [self._score_batches(pairs, batches, self._models[0], devices[0])]
+        else:
+            per_device = self._round_robin(batches, len(devices))
+            with ThreadPoolExecutor(max_workers=len(devices)) as pool:
+                futures = [
+                    pool.submit(self._score_batches, pairs, chunk, model, device)
+                    for chunk, model, device in zip(per_device, self._models, devices)
+                ]
+                partials = [future.result() for future in futures]
 
-                outputs = self._model(**inputs)
-                batch_scores = outputs.logits.view(-1).float().cpu().tolist()
-                for i, score in zip(batch_idx, batch_scores):
-                    scores[i] = score
-                del inputs, outputs
-
+        scores = [0.0] * len(pairs)
+        for partial in partials:
+            for index, score in partial.items():
+                scores[index] = score
         return scores
 
     def rerank(
