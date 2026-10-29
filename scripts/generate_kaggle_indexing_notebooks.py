@@ -35,7 +35,7 @@ def make_notebook_1():
 > **Thời gian chạy**: ~12 – 18 phút cho toàn bộ 1.025M bài viết.
 > **Mục tiêu**:
 > 1. Tải 14 shards Parquet corpus (1,025,647 bài viết) từ HF Bucket.
-> 2. Phân đoạn **Chunk lớn 1,500 ký tự** (overlap 250 ký tự) để giải quyết dứt điểm ngưỡng Token Overlap $\\ge 0.40$ của BTC.
+> 2. Phân đoạn **Chunk 750 ký tự** (overlap 120 ký tự) trên corpus đã làm sạch (boilerplate + audit verdict) để giải quyết dứt điểm ngưỡng Token Overlap $\\ge 0.40$ của BTC.
 > 3. Lưu toàn bộ metadata vào SQLite `chunks_meta.sqlite`.
 > 4. Xây dựng chỉ mục thưa đa ngôn ngữ siêu tốc **BM25s** (Mmap, zero-RAM).
 > 5. Đồng bộ `chunks_meta.sqlite` và `bm25s_index/` lên Hugging Face Bucket để Stage 2 (GPU) sử dụng."""))
@@ -50,7 +50,7 @@ def make_notebook_1():
 import os
 from pathlib import Path
 
-REPO_URL = "https://github.com/nieths/med-doc-retrieval.git"
+REPO_URL = "https://github.com/neiths/med-doc-retrieval.git"
 PROJECT_DIR = Path("/kaggle/working/med-doc-retrieval")
 
 if not PROJECT_DIR.exists():
@@ -84,8 +84,9 @@ os.environ["HF_TOKEN"] = HF_TOKEN
 api = HfApi(token=HF_TOKEN)"""))
 
     # Cell 4: Download 14 corpus parquet shards
-    cells.append(nbf.v4.new_code_cell("""# 4. Tải 14 shards Parquet Corpus (1.025M bài viết) từ Hugging Face Bucket
+    cells.append(nbf.v4.new_code_cell("""# 4. Tải 14 shards Parquet Corpus (1.025M bài viết) + bảng làm sạch từ Hugging Face Bucket
 import os
+import subprocess
 from pathlib import Path
 
 corpus_dir = Path("data/processed/parquet_corpus")
@@ -111,14 +112,28 @@ if missing_shards:
     )
     print("✅ Tải xong toàn bộ 14 shards corpus!")
 else:
-    print("\\n✅ Đã có đầy đủ toàn bộ 14 shards corpus!")"""))
+    print("\\n✅ Đã có đầy đủ toàn bộ 14 shards corpus!")
 
-    # Cell 5: Structure-Aware Chunking (1500 chars) & SQLite Metadata Creator
-    cells.append(nbf.v4.new_code_cell("""# 5. Phân đoạn văn bản (Chunk size = 1,500 ký tự) & Ghi vào SQLite
+# Bảng làm sạch: dòng boilerplate lặp theo domain + verdict audit từng document
+for fname in ("boilerplate_lines.parquet", "corpus_audit_slim.parquet"):
+    local_p = corpus_dir.parent / fname
+    if local_p.exists() and local_p.stat().st_size > 0:
+        print(f"✓ Đã có: {fname} ({local_p.stat().st_size / (1024*1024):.2f} MB)")
+        continue
+    print(f"📥 Đang tải {fname} từ HF Bucket...")
+    subprocess.run(
+        ["hf", "buckets", "cp", f"hf://buckets/nieths/ViBioMIR/corpus/{fname}", str(local_p)],
+        check=True,
+    )
+print("✅ Bảng làm sạch đã sẵn sàng!")"""))
+
+    # Cell 5: Structure-Aware Chunking (750 chars, cleaned corpus) & SQLite Metadata Creator
+    cells.append(nbf.v4.new_code_cell("""# 5. Phân đoạn văn bản 750 ký tự trên dữ liệu ĐÃ LÀM SẠCH & Ghi vào SQLite
 import sqlite3
 import time
 from tqdm import tqdm
 import pyarrow.parquet as pq
+from src.ingestion.boilerplate import load_table
 from src.ingestion.chunker import DocumentChunker
 from src.ingestion.cleaner import normalize_text, detect_language
 
@@ -126,13 +141,32 @@ indices_dir = Path("data/indices")
 indices_dir.mkdir(parents=True, exist_ok=True)
 sqlite_path = indices_dir / "chunks_meta.sqlite"
 
+# Làm sạch 1: bỏ dòng điều hướng/footer lặp lại trong từng domain
+boilerplate_path = corpus_dir.parent / "boilerplate_lines.parquet"
+boilerplate = load_table(boilerplate_path) if boilerplate_path.exists() else {}
+print(
+    f"🧹 Boilerplate: {len(boilerplate):,} domains, "
+    f"{sum(len(v) for v in boilerplate.values()):,} dòng bị loại"
+)
+
+# Làm sạch 2: bỏ document có verdict = drop trong bảng audit
+audit_path = corpus_dir.parent / "corpus_audit_slim.parquet"
+drop_ids = set()
+if audit_path.exists():
+    audit_tbl = pq.read_table(str(audit_path), columns=["doc_id", "verdict"])
+    for did, verdict in zip(audit_tbl["doc_id"].to_pylist(), audit_tbl["verdict"].to_pylist()):
+        if verdict == "drop":
+            drop_ids.add(int(did))
+print(f"🧹 Audit: bỏ qua {len(drop_ids):,} documents (verdict=drop)")
+
 # Thiết lập Chunker tối ưu cho tiêu chuẩn BTC
 chunker = DocumentChunker(
-    max_chunk_size=1500,     # Chuẩn độ dài gold paragraph của BTC (~300-350 tokens)
-    chunk_overlap=250,       # Đảm bảo giữ trọn ngữ cảnh y khoa giữa các câu
-    min_chunk_size=80,       # Lọc bỏ rác/mẩu câu vụn
+    max_chunk_size=750,     # Chuẩn độ dài gold paragraph của BTC (~300-350 tokens)
+    chunk_overlap=120,       # Đảm bảo giữ trọn ngữ cảnh y khoa giữa các câu
+    min_chunk_size=50,       # Lọc bỏ rác/mẩu câu vụn (khớp Stage 2 để chunk_id trùng nhau)
     split_by_sentences=True, # Cắt chính xác tại biên câu
     enable_contextual=True,  # Giữ tiêu đề bài viết
+    boilerplate=boilerplate,
 )
 
 print(f"Khởi tạo cơ sở dữ liệu SQLite tại: {sqlite_path}...")
@@ -161,6 +195,7 @@ cur.execute("CREATE INDEX idx_chunks_doc_id ON chunks (doc_id)")
 cur.execute("CREATE INDEX idx_chunks_domain ON chunks (domain)")
 
 global_chunk_id = 0
+skipped_docs = 0
 insert_buffer = []
 t0 = time.time()
 
@@ -178,12 +213,16 @@ for shard_file in tqdm(corpus_shards, desc="Processing Shards"):
     
     for did, u, tit, txt, lg, dom in zip(doc_ids, urls, titles, texts, langs, domains):
         if not txt or len(txt.strip()) < 50:
+            skipped_docs += 1
             continue
-            
+        if int(did) in drop_ids:
+            skipped_docs += 1
+            continue
+
         doc_chunks = chunker.chunk_document(
             doc_id=str(did),
             text=txt,
-            title=tit or "",
+            metadata={"title": tit or "", "domain": dom or ""},
             lang=lg or "vi",
         )
         
@@ -223,6 +262,7 @@ size_mb = sqlite_path.stat().st_size / (1024 * 1024)
 print("=" * 60)
 print(f"🎉 HOÀN TẤT CHUNKING VÀ TẠO METADATA SQLITE:")
 print(f"  Tổng số chunks tạo ra: {global_chunk_id:,}")
+print(f"  Số documents bị bỏ qua: {skipped_docs:,}")
 print(f"  Dung lượng SQLite:     {size_mb:.2f} MB")
 print(f"  Thời gian thực hiện:   {elapsed/60:.2f} phút")
 print("=" * 60)"""))
@@ -277,8 +317,9 @@ meta_path = indices_dir / "bm25s_metadata.json"
 with open(meta_path, "w", encoding="utf-8") as f:
     json.dump({
         "num_chunks": global_chunk_id,
-        "max_chunk_size": 1500,
-        "chunk_overlap": 250,
+        "max_chunk_size": 750,
+        "chunk_overlap": 120,
+        "cleaning": "boilerplate+audit-drop",
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }, f, indent=2)
 
@@ -377,7 +418,7 @@ def make_notebook_2():
 import os
 from pathlib import Path
 
-REPO_URL = "https://github.com/nieths/med-doc-retrieval.git"
+REPO_URL = "https://github.com/neiths/med-doc-retrieval.git"
 PROJECT_DIR = Path("/kaggle/working/med-doc-retrieval")
 
 if not PROJECT_DIR.exists():

@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from src.ingestion.boilerplate import strip_boilerplate
 from src.ingestion.cleaner import detect_language, normalize_text
 
 
@@ -114,12 +115,19 @@ class DocumentChunker:
         min_chunk_size: int = 50,
         split_by_sentences: bool = True,
         enable_contextual: bool = True,
+        boilerplate: dict[str, set[int]] | None = None,
     ):
         self.max_chunk_size = max_chunk_size
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
         self.split_by_sentences = split_by_sentences
         self.enable_contextual = enable_contextual
+        self.boilerplate = boilerplate or {}
+
+    def _strip_site_chrome(self, text: str, domain: str | None) -> str:
+        if not self.boilerplate or not domain:
+            return text
+        return strip_boilerplate(text, self.boilerplate.get(domain))
 
     def chunk_document(
         self,
@@ -134,16 +142,18 @@ class DocumentChunker:
 
         Guarantees that chunks never cut across words or mid-sentence.
         """
-        cleaned_text = normalize_text(text)
-        if not cleaned_text:
-            return []
-
-        doc_lang = lang or detect_language(cleaned_text)
         meta = dict(metadata or {})
         if title and "title" not in meta:
             meta["title"] = title
         if kwargs:
             meta.update(kwargs)
+
+        cleaned_text = self._strip_site_chrome(text, meta.get("domain"))
+        cleaned_text = normalize_text(cleaned_text)
+        if not cleaned_text:
+            return []
+
+        doc_lang = lang or detect_language(cleaned_text)
 
         # If text is already shorter than max_chunk_size, return it as a single chunk
         if len(cleaned_text) <= self.max_chunk_size:

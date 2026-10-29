@@ -124,9 +124,13 @@ class MedicalRetrievalPipeline:
                 if not parquet_files:
                     raise FileNotFoundError(f"No .parquet files found in directory {art_path}")
                 logger.info(f"Reading {len(parquet_files)} Parquet shards from {art_path}...")
-                table = pq.read_table(parquet_files, columns=["doc_id", "url", "title", "text", "lang"])
+                table = pq.read_table(
+                    parquet_files, columns=["doc_id", "url", "title", "text", "lang", "domain"]
+                )
             else:
-                table = pq.read_table(art_path, columns=["doc_id", "url", "title", "text", "lang"])
+                table = pq.read_table(
+                    art_path, columns=["doc_id", "url", "title", "text", "lang", "domain"]
+                )
             articles = table.to_pylist()
         else:
             with open(art_path, encoding="utf-8") as f:
@@ -135,6 +139,18 @@ class MedicalRetrievalPipeline:
                         articles.append(json.loads(line))
 
         logger.info(f"Loaded {len(articles)} documents. Starting chunking...")
+
+        boilerplate_path = Path(self.config.paths.processed_data_dir) / "boilerplate_lines.parquet"
+        if boilerplate_path.exists():
+            from src.ingestion.boilerplate import load_table
+
+            self.chunker.boilerplate = load_table(boilerplate_path)
+            logger.info(
+                f"Stripping site boilerplate for {len(self.chunker.boilerplate):,} domains "
+                f"from {boilerplate_path}"
+            )
+        else:
+            logger.info(f"No boilerplate table at {boilerplate_path}; chunking raw text.")
 
         # 2. Chunking
         all_chunks: list[dict[str, Any]] = []
@@ -145,6 +161,7 @@ class MedicalRetrievalPipeline:
             meta = {
                 "title": art.get("title", ""),
                 "url": art.get("url", ""),
+                "domain": art.get("domain", ""),
                 "source": art.get("source", "unknown"),
             }
             chunks = self.chunker.chunk_document(doc_id=doc_id, text=text, metadata=meta, lang=lang)
