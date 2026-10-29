@@ -34,8 +34,8 @@ def make_notebook_1():
 > **Tài nguyên**: Chạy trên **Kaggle CPU-Only (4 vCPUs, 30 GB RAM, 0 giờ GPU!)**.
 > **Thời gian chạy**: ~12 – 18 phút cho toàn bộ 1.025M bài viết.
 > **Mục tiêu**:
-> 1. Tải 14 shards Parquet corpus (1,025,647 bài viết) từ HF Bucket.
-> 2. Phân đoạn **Chunk 750 ký tự** (overlap 120 ký tự) trên corpus đã làm sạch (boilerplate + audit verdict) để giải quyết dứt điểm ngưỡng Token Overlap $\\ge 0.40$ của BTC.
+> 1. Tải 14 shards Parquet corpus (1,025,647 bài viết) + bảng làm sạch (`boilerplate_lines.parquet`, `corpus_audit_slim.parquet`) từ HF Bucket.
+> 2. Bỏ các dòng điều hướng/footer lặp theo domain và các document có `verdict = drop`, rồi phân đoạn **chunk 750 ký tự** (overlap 120 ký tự) để giải quyết dứt điểm ngưỡng Token Overlap $\\ge 0.40$ của BTC.
 > 3. Lưu toàn bộ metadata vào SQLite `chunks_meta.sqlite`.
 > 4. Xây dựng chỉ mục thưa đa ngôn ngữ siêu tốc **BM25s** (Mmap, zero-RAM).
 > 5. Đồng bộ `chunks_meta.sqlite` và `bm25s_index/` lên Hugging Face Bucket để Stage 2 (GPU) sử dụng."""))
@@ -57,12 +57,13 @@ if not PROJECT_DIR.exists():
     print("🚀 Đang clone repository từ GitHub...")
     !git clone -b main $REPO_URL $PROJECT_DIR
 else:
-    print("🔄 Đang cập nhật repository...")
-    %cd $PROJECT_DIR
-    !git pull origin main
+    print("🔄 Đồng bộ bản clone về đúng origin/main...")
+    !git -C $PROJECT_DIR fetch origin main
+    !git -C $PROJECT_DIR reset --hard origin/main
 
 %cd $PROJECT_DIR
-print("Thư mục làm việc hiện tại:", os.getcwd())"""))
+print("Commit đang dùng:")
+!git log -1 --oneline"""))
 
     # Cell 3: HF Token Authentication
     cells.append(nbf.v4.new_code_cell("""# 3. Cấu hình bảo mật Hugging Face Token
@@ -129,13 +130,27 @@ print("✅ Bảng làm sạch đã sẵn sàng!")"""))
 
     # Cell 5: Structure-Aware Chunking (750 chars, cleaned corpus) & SQLite Metadata Creator
     cells.append(nbf.v4.new_code_cell("""# 5. Phân đoạn văn bản 750 ký tự trên dữ liệu ĐÃ LÀM SẠCH & Ghi vào SQLite
+import importlib
+import inspect
 import sqlite3
+import subprocess
 import time
 from tqdm import tqdm
 import pyarrow.parquet as pq
-from src.ingestion.boilerplate import load_table
-from src.ingestion.chunker import DocumentChunker
 from src.ingestion.cleaner import normalize_text, detect_language
+
+print("Git:", subprocess.run(["git", "log", "-1", "--oneline"], capture_output=True, text=True).stdout.strip())
+
+# Kernel có thể còn giữ module cũ đã import trước khi git pull -> nạp lại từ đĩa
+import src.ingestion.chunker as chunker_module
+chunker_module = importlib.reload(chunker_module)
+if "boilerplate" not in inspect.signature(chunker_module.DocumentChunker.__init__).parameters:
+    raise RuntimeError(
+        "Bản clone trong /kaggle/working chưa có code mới (DocumentChunker thiếu tham số boilerplate). "
+        "Chạy lại cell clone/pull ở trên, rồi Kernel > Restart trước khi chạy cell này."
+    )
+DocumentChunker = chunker_module.DocumentChunker
+from src.ingestion.boilerplate import load_table
 
 indices_dir = Path("data/indices")
 indices_dir.mkdir(parents=True, exist_ok=True)
@@ -210,7 +225,7 @@ for shard_file in tqdm(corpus_shards, desc="Processing Shards"):
     texts = tbl["text"].to_pylist()
     langs = tbl["lang"].to_pylist()
     domains = tbl["domain"].to_pylist()
-    
+
     for did, u, tit, txt, lg, dom in zip(doc_ids, urls, titles, texts, langs, domains):
         if not txt or len(txt.strip()) < 50:
             skipped_docs += 1
@@ -225,7 +240,7 @@ for shard_file in tqdm(corpus_shards, desc="Processing Shards"):
             metadata={"title": tit or "", "domain": dom or ""},
             lang=lg or "vi",
         )
-        
+
         for ch in doc_chunks:
             insert_buffer.append((
                 global_chunk_id,
@@ -239,7 +254,7 @@ for shard_file in tqdm(corpus_shards, desc="Processing Shards"):
                 len(ch.chunk_text),
             ))
             global_chunk_id += 1
-            
+
             if len(insert_buffer) >= 20000:
                 cur.executemany(\"\"\"
                 INSERT INTO chunks (chunk_id, doc_id, title, chunk_text, contextual_text, url, domain, lang, char_count)
@@ -425,12 +440,13 @@ if not PROJECT_DIR.exists():
     print("🚀 Đang clone repository từ GitHub...")
     !git clone -b main $REPO_URL $PROJECT_DIR
 else:
-    print("🔄 Đang cập nhật repository...")
-    %cd $PROJECT_DIR
-    !git pull origin main
+    print("🔄 Đồng bộ bản clone về đúng origin/main...")
+    !git -C $PROJECT_DIR fetch origin main
+    !git -C $PROJECT_DIR reset --hard origin/main
 
 %cd $PROJECT_DIR
-print("Thư mục làm việc hiện tại:", os.getcwd())"""))
+print("Commit đang dùng:")
+!git log -1 --oneline"""))
 
     # Cell 4: HF Token Auth
     cells.append(nbf.v4.new_code_cell("""# 4. Cấu hình Hugging Face Token an toàn
@@ -617,11 +633,9 @@ def main():
         nbf.write(nb1, f)
     print(f"Created: {p1}")
 
-    nb2 = make_notebook_2()
-    p2 = out_dir / "02_kaggle_build_dense_gpu.ipynb"
-    with open(p2, "w", encoding="utf-8") as f:
-        nbf.write(nb2, f)
-    print(f"Created: {p2}")
+    # Notebook 02 is hand-maintained (resume checkpoints, cleaning tables); the
+    # generator version is stale, so do not let this script overwrite it.
+    print("Skipped: notebooks/02_kaggle_build_dense_gpu.ipynb (edited by hand)")
 
 
 if __name__ == "__main__":
