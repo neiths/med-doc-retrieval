@@ -11,6 +11,7 @@ import argparse
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 # Ensure repo root is in sys.path
@@ -135,8 +136,39 @@ def main():
         default=None,
         help="Max chunks fetched per expanded document (default 8).",
     )
+    parser.add_argument(
+        "--multi-query",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Fuse clause-level sub-queries with RRF (overrides config).",
+    )
+    parser.add_argument(
+        "--max-subqueries",
+        type=int,
+        default=None,
+        help="Max clause-level sub-queries generated per query (default 4).",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Skip the first N queries (shard start).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process at most N queries (shard size).",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="JSONL file appended after every query; rerunning the same command resumes it.",
+    )
 
     args = parser.parse_args()
+    t0 = time.monotonic()
     setup_inference_env()
 
     config = load_config("configs/config.yaml")
@@ -159,6 +191,10 @@ def main():
         config.reranker.expand_top_docs = args.expand_top_docs
     if args.expand_max_chunks_per_doc is not None:
         config.reranker.expand_max_chunks_per_doc = args.expand_max_chunks_per_doc
+    if args.multi_query is not None:
+        config.retrieval.multi_query.enabled = args.multi_query
+    if args.max_subqueries is not None:
+        config.retrieval.multi_query.max_subqueries = args.max_subqueries
 
     logger.info(
         f"Retrieval Settings: hybrid_top_k={config.retrieval.hybrid_top_k} | "
@@ -166,7 +202,9 @@ def main():
         f"top_k_docs={config.reranker.top_k_docs} | "
         f"max_chunks_per_doc={getattr(config.reranker, 'max_chunks_per_doc', 2)} | "
         f"expand_top_docs={config.reranker.expand_top_docs} | "
-        f"expand_max_chunks_per_doc={config.reranker.expand_max_chunks_per_doc}"
+        f"expand_max_chunks_per_doc={config.reranker.expand_max_chunks_per_doc} | "
+        f"multi_query={config.retrieval.multi_query.enabled} "
+        f"(max_subqueries={config.retrieval.multi_query.max_subqueries})"
     )
 
     if args.disable_pubmed_network:
@@ -325,7 +363,19 @@ def main():
                 raise FileNotFoundError(f"Could not find or download queries: {e}")
 
     logger.info(f"Running batch prediction on {queries_path}...")
-    predictions = pipeline.predict_queries_jsonl(queries_path)
+    if args.offset or args.limit is not None:
+        logger.info(f"Query shard: offset={args.offset}, limit={args.limit}")
+    predictions = pipeline.predict_queries_jsonl(
+        queries_path,
+        offset=args.offset,
+        limit=args.limit,
+        checkpoint_path=args.checkpoint,
+    )
+    if not predictions:
+        raise SystemExit(
+            f"No predictions produced for shard offset={args.offset}, limit={args.limit}. "
+            "Check the queries file and shard bounds."
+        )
 
     logger.info("Packaging official submission...")
     json_file, zip_file = SubmissionPackage.save_and_package(
@@ -343,8 +393,11 @@ def main():
             except Exception:
                 pass
 
+    logger.info(f"Total wall time: {(time.monotonic() - t0) / 60:.1f} min")
+
     print("\n" + "=" * 60)
     print(f"🎉 INFERENCE COMPLETE!")
+    print(f"Total wall time: {(time.monotonic() - t0) / 60:.1f} min")
     print(f"Submission ZIP: {abs_zip} ({abs_zip.stat().st_size / (1024*1024):.2f} MB)")
     if Path("/kaggle/working").exists():
         print(f"Kaggle Download: /kaggle/working/{abs_zip.name}")

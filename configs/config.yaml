@@ -42,6 +42,11 @@ retrieval:
   dense_weight: 0.6
   sparse_weight: 0.4
   hybrid_top_k: 350         # Feed 350 diverse candidates to reranker to boost recall
+  multi_query:
+    enabled: false          # Prototype: fuse clause-level sub-queries with RRF (A/B with --multi-query)
+    max_subqueries: 4       # Split narrative queries into at most N clauses
+    subquery_weight: 0.6    # RRF weight of each sub-query relative to the full query (1.0)
+    min_chars: 12           # Drop clauses shorter than this (noise)
 
 reranker:
   enabled: true

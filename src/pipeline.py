@@ -1,6 +1,7 @@
 """End-to-end Pipeline orchestrator for Medical Document Retrieval."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from src.ingestion.chunker import DocumentChunker
 from src.reranker.bge_reranker import BGEReranker
 from src.retrieval.dense_index import DenseIndex
 from src.retrieval.hybrid import HybridRetriever
+from src.retrieval.multi_query import build_subqueries, fuse_candidates
 from src.retrieval.qdrant_index import QdrantLocalIndex
 from src.retrieval.sparse_index import SparseIndex
 from src.submission.formatter import SubmissionPackage
@@ -311,6 +313,15 @@ class MedicalRetrievalPipeline:
         q_emb = q_dense[0]
         q_sparse_dict = q_sparse[0] if q_sparse else None
 
+        mq_config = self.config.retrieval.multi_query
+        subqueries: list[str] = []
+        if mq_config.enabled and self.hybrid_retriever is not None:
+            subqueries = build_subqueries(
+                query_text_for_search,
+                max_subqueries=mq_config.max_subqueries,
+                min_chars=mq_config.min_chars,
+            )
+
         # 2. Local Hybrid / Dense Search (VI & ZH from pre-built indices)
         local_candidates: list[dict[str, Any]] = []
         if self.config.retrieval.engine == "qdrant" and self.qdrant_index is not None:
@@ -322,13 +333,45 @@ class MedicalRetrievalPipeline:
                     top_k=self.config.retrieval.hybrid_top_k,
                 )
         elif self.hybrid_retriever is not None:
-            local_candidates = self.hybrid_retriever.search(
-                query_text=query_text_for_search,
-                query_embedding=q_emb,
-                top_k=self.config.retrieval.hybrid_top_k,
-                dense_top_k=self.config.retrieval.dense_top_k,
-                sparse_top_k=self.config.retrieval.sparse_top_k,
-            )
+            search_kwargs = {
+                "top_k": self.config.retrieval.hybrid_top_k,
+                "dense_top_k": self.config.retrieval.dense_top_k,
+                "sparse_top_k": self.config.retrieval.sparse_top_k,
+            }
+            if subqueries:
+                sub_embs = self.embedder.encode(subqueries)
+                weighted_lists = [
+                    (
+                        1.0,
+                        self.hybrid_retriever.search(
+                            query_text=query_text_for_search,
+                            query_embedding=q_emb,
+                            **search_kwargs,
+                        ),
+                    )
+                ]
+                for subquery, sub_emb in zip(subqueries, sub_embs):
+                    weighted_lists.append(
+                        (
+                            mq_config.subquery_weight,
+                            self.hybrid_retriever.search(
+                                query_text=subquery,
+                                query_embedding=sub_emb,
+                                **search_kwargs,
+                            ),
+                        )
+                    )
+                local_candidates = fuse_candidates(
+                    weighted_lists,
+                    top_k=self.config.retrieval.hybrid_top_k,
+                    rrf_k=self.config.retrieval.rrf_k,
+                )
+            else:
+                local_candidates = self.hybrid_retriever.search(
+                    query_text=query_text_for_search,
+                    query_embedding=q_emb,
+                    **search_kwargs,
+                )
         elif self.dense_index is not None:
             # Multi-lingual Multi-query Dense Retrieval (VI + EN Translation + ZH Keywords)
             dense_queries = [(1.0, q_emb)]
@@ -470,8 +513,23 @@ class MedicalRetrievalPipeline:
             "relevant_chunks": relevant_chunks,
         }
 
-    def predict_queries_jsonl(self, queries_file: str | Path) -> list[dict[str, Any]]:
-        """Runs predictions for all queries in a JSONL or Parquet file."""
+    def predict_queries_jsonl(
+        self,
+        queries_file: str | Path,
+        offset: int = 0,
+        limit: int | None = None,
+        checkpoint_path: str | Path | None = None,
+    ) -> list[dict[str, Any]]:
+        """Runs predictions for queries, optionally sharded and checkpointed.
+
+        Args:
+            queries_file: JSONL or Parquet file with queries.
+            offset: Index of the first query handled by this shard.
+            limit: Number of queries in this shard (None = to the end of the file).
+            checkpoint_path: Optional JSONL file. Existing predictions are reused and
+                every new prediction is flushed immediately, so an interrupted run
+                resumes without re-scoring finished queries.
+        """
         q_path = Path(queries_file)
         queries = []
         if q_path.suffix == ".parquet":
@@ -485,21 +543,58 @@ class MedicalRetrievalPipeline:
                     if line.strip():
                         queries.append(json.loads(line))
 
-        predictions = []
-        logger.info(f"Predicting {len(queries)} queries...")
-        for q in tqdm(queries, desc="Evaluating queries"):
-            qid = int(q["id"])
-            query_text = q.get("query") or q.get("original_query") or ""
-            result = self.search_query(query_text)
-            predictions.append(
-                {
+        shard = queries[offset:] if limit is None else queries[offset : offset + limit]
+
+        done: dict[int, dict[str, Any]] = {}
+        ckpt = Path(checkpoint_path) if checkpoint_path else None
+        if ckpt is not None and ckpt.exists():
+            with open(ckpt, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        item = json.loads(line)
+                        done[int(item["id"])] = item
+            logger.info(f"Resuming from {ckpt}: {len(done):,} predictions already done.")
+
+        pending = [q for q in shard if int(q["id"]) not in done]
+        logger.info(
+            f"Predicting {len(pending):,} queries (offset={offset}, limit={limit}, "
+            f"shard={len(shard):,}, reused={len(shard) - len(pending):,})."
+        )
+
+        cf = None
+        if ckpt is not None:
+            ckpt.parent.mkdir(parents=True, exist_ok=True)
+            cf = open(ckpt, "a", encoding="utf-8")
+
+        try:
+            started = time.monotonic()
+            for done_count, q in enumerate(tqdm(pending, desc="Evaluating queries"), start=1):
+                qid = int(q["id"])
+                query_text = q.get("query") or q.get("original_query") or ""
+                result = self.search_query(query_text)
+                prediction = {
                     "id": qid,
                     "relevant_docs": result["relevant_docs"],
                     "relevant_chunks": result["relevant_chunks"],
                 }
-            )
+                done[qid] = prediction
+                if cf is not None:
+                    cf.write(json.dumps(prediction, ensure_ascii=False) + "\n")
+                    cf.flush()
 
-        return predictions
+                if done_count % 50 == 0:
+                    elapsed = time.monotonic() - started
+                    rate = done_count / elapsed
+                    eta_min = (len(pending) - done_count) / rate / 60
+                    logger.info(
+                        f"Progress {done_count:,}/{len(pending):,} | {rate:.3f} q/s | "
+                        f"elapsed {elapsed / 60:.1f} min | ETA {eta_min:.1f} min"
+                    )
+        finally:
+            if cf is not None:
+                cf.close()
+
+        return [done[int(q["id"])] for q in shard if int(q["id"]) in done]
 
     def generate_submission(
         self,

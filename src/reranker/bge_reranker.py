@@ -38,12 +38,16 @@ class BGEReranker:
 
             logger.info(f"Loading reranker model weights from {self.model_name}...")
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            dtype = torch.float16 if (self.use_fp16 and torch.cuda.is_available()) else torch.float32
+            dtype = (
+                torch.float16 if (self.use_fp16 and torch.cuda.is_available()) else torch.float32
+            )
 
             target_device = self.device
             if self.device in ["cuda", "auto"] and torch.cuda.device_count() > 1:
                 target_device = "cuda:1"
-                logger.info(f"Multi-GPU detected: Allocating BGE-Reranker to secondary GPU ({target_device}).")
+                logger.info(
+                    f"Multi-GPU detected: Allocating BGE-Reranker to secondary GPU ({target_device})."
+                )
 
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_name,
@@ -53,19 +57,23 @@ class BGEReranker:
             self._model.eval()
             self.device = target_device
 
+    def _batches_by_length(self, pairs: list[tuple[str, str]]) -> list[list[int]]:
+        """Groups pair indices by passage length so batches pad as little as possible."""
+        order = sorted(range(len(pairs)), key=lambda i: len(pairs[i][1]))
+        return [order[i : i + self.batch_size] for i in range(0, len(order), self.batch_size)]
+
     def compute_scores(self, pairs: list[tuple[str, str]]) -> list[float]:
         """Computes cross-encoder relevance scores for (query, document/chunk) pairs."""
         if not pairs:
             return []
 
         self._load_model()
-        scores: list[float] = []
+        scores: list[float] = [0.0] * len(pairs)
 
-        with torch.no_grad():
-            for i in range(0, len(pairs), self.batch_size):
-                batch_pairs = pairs[i : i + self.batch_size]
+        with torch.inference_mode():
+            for batch_idx in self._batches_by_length(pairs):
                 inputs = self._tokenizer(
-                    batch_pairs,
+                    [pairs[i] for i in batch_idx],
                     padding=True,
                     truncation=True,
                     max_length=512,
@@ -74,7 +82,8 @@ class BGEReranker:
 
                 outputs = self._model(**inputs)
                 batch_scores = outputs.logits.view(-1).float().cpu().tolist()
-                scores.extend(batch_scores)
+                for i, score in zip(batch_idx, batch_scores):
+                    scores[i] = score
                 del inputs, outputs
 
         return scores
@@ -159,9 +168,7 @@ class BGEReranker:
                 )
                 for c, score in zip(fresh, extra_scores):
                     c["rerank_score"] = score
-                valid_candidates.extend(
-                    c for c in fresh if c["rerank_score"] >= score_threshold
-                )
+                valid_candidates.extend(c for c in fresh if c["rerank_score"] >= score_threshold)
                 valid_candidates.sort(key=lambda x: x["rerank_score"], reverse=True)
 
         # 1. Extract unique documents preserving order of highest chunk score up to top_k_docs
@@ -209,4 +216,3 @@ class BGEReranker:
                         break
 
         return doc_ids, formatted_chunks
-

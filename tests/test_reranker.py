@@ -124,3 +124,24 @@ def test_expansion_disabled_by_default():
     )
     assert called == []
     assert doc_ids == ["doc1"]
+
+
+def test_length_sorted_batches_cover_all_pairs_once():
+    reranker = BGEReranker(device="cpu", batch_size=3)
+    pairs = [
+        ("q", "x" * 100),
+        ("q", "x" * 10),
+        ("q", "x" * 50),
+        ("q", "x" * 1000),
+        ("q", "x" * 20),
+        ("q", "x" * 200),
+        ("q", "x" * 5),
+    ]
+
+    batches = reranker._batches_by_length(pairs)
+
+    flat = [i for batch in batches for i in batch]
+    assert sorted(flat) == list(range(len(pairs)))
+    assert all(len(batch) <= 3 for batch in batches)
+    lengths = [[len(pairs[i][1]) for i in batch] for batch in batches]
+    assert lengths == [[5, 10, 20], [50, 100, 200], [1000]]

@@ -41,6 +41,13 @@ class EmbeddingConfig(BaseModel):
     return_sparse: bool = True
 
 
+class MultiQueryConfig(BaseModel):
+    enabled: bool = False
+    max_subqueries: int = 4
+    subquery_weight: float = 0.6
+    min_chars: int = 12
+
+
 class RetrievalConfig(BaseModel):
     engine: str = "qdrant"  # "qdrant" (recommended) or "faiss"
     qdrant_path: Path = Path("data/indices/qdrant_db")
@@ -52,6 +59,7 @@ class RetrievalConfig(BaseModel):
     dense_weight: float = 0.6
     sparse_weight: float = 0.4
     hybrid_top_k: int = 30
+    multi_query: MultiQueryConfig = Field(default_factory=MultiQueryConfig)
 
 
 class RerankerConfig(BaseModel):
