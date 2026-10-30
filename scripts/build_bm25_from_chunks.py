@@ -44,15 +44,20 @@ class ChunksTokenStream:
 
 
 class SqliteTokenStream:
-    """Zero-RAM streaming iterator over chunks_meta.sqlite for bm25s multiple indexing passes."""
+    """Zero-RAM streaming iterator over chunks SQLite for bm25s multiple indexing passes."""
 
     def __init__(self, db_path: Path | str):
         self.db_path = str(db_path)
+        conn = sqlite3.connect(self.db_path)
+        cur = conn.cursor()
+        cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
+        self.order_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
+        conn.close()
 
     def __iter__(self):
         conn = sqlite3.connect(self.db_path)
         cur = conn.cursor()
-        for row in cur.execute("SELECT chunk_text, title, lang FROM chunks ORDER BY idx"):
+        for row in cur.execute(f"SELECT chunk_text, title, lang FROM chunks ORDER BY {self.order_col}"):
             raw_c = row[0] or ""
             title = row[1] or ""
             lang = row[2] or "vi"
@@ -70,7 +75,11 @@ def main():
     chunks_file = Path("data/processed/chunks.jsonl")
     indices_dir = Path("data/indices")
     indices_dir.mkdir(parents=True, exist_ok=True)
-    sqlite_file = indices_dir / "chunks_meta.sqlite"
+    sqlite_file = (
+        indices_dir / "chunks_meta_slim.sqlite"
+        if (indices_dir / "chunks_meta_slim.sqlite").exists()
+        else indices_dir / "chunks_meta.sqlite"
+    )
     bm25s_dir = indices_dir / "bm25s_index"
 
     if not chunks_file.exists() and not sqlite_file.exists():
@@ -82,14 +91,16 @@ def main():
     chunk_ids = []
 
     sqlite_ready = False
-    if sqlite_file.exists() and sqlite_file.stat().st_size > 1_000_000_000:
+    if sqlite_file.exists() and sqlite_file.stat().st_size > 500_000_000:
         try:
             conn = sqlite3.connect(sqlite_file)
             cur = conn.cursor()
             count = cur.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-            if count >= 1_600_000:
+            if count >= 1_000_000:
                 logger.info(f"Step 1 SKIPPED: Found existing complete SQLite index with {count:,} chunks.")
-                chunk_ids = [r[0] for r in cur.execute("SELECT chunk_id FROM chunks ORDER BY idx").fetchall()]
+                cols = [c[1] for c in cur.execute("PRAGMA table_info(chunks)").fetchall()]
+                order_col = "chunk_id" if "chunk_id" in cols else ("idx" if "idx" in cols else "rowid")
+                chunk_ids = [r[0] for r in cur.execute(f"SELECT chunk_id FROM chunks ORDER BY {order_col}").fetchall()]
                 conn.close()
                 sqlite_ready = True
             else:
