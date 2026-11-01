@@ -587,7 +587,14 @@ class MedicalRetrievalPipeline:
             started = time.monotonic()
             for done_count, q in enumerate(tqdm(pending, desc="Evaluating queries"), start=1):
                 qid = int(q["id"])
-                query_text = q.get("query") or q.get("original_query") or ""
+                query_text = (
+                    q.get("enriched_query")
+                    or q.get("search_query_text")
+                    or q.get("query")
+                    or q.get("original_query")
+                    or q.get("original_text")
+                    or ""
+                )
                 result = self.search_query(query_text)
                 prediction = {
                     "id": qid,

@@ -331,11 +331,15 @@ def main():
     # Resolve queries path
     queries_path = args.queries
     if queries_path is None or not queries_path.exists():
+        hyde_file = Path("data/processed/queries_hyde.jsonl")
         enriched_file = Path("data/processed/queries_enriched.jsonl")
         query_parquet = Path("data/raw/vibio_mir/query.parquet")
         raw_queries = Path("data/raw/queries.jsonl")
 
-        if enriched_file.exists():
+        if hyde_file.exists():
+            queries_path = hyde_file
+            logger.info(f"Using precomputed HyDE-enriched queries: {queries_path}")
+        elif enriched_file.exists():
             queries_path = enriched_file
             logger.info(f"Using precomputed enriched queries: {queries_path}")
         elif query_parquet.exists():
