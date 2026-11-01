@@ -77,6 +77,7 @@ class MedicalRetrievalPipeline:
         self.sparse_index: SparseIndex | None = None
         self.hybrid_retriever: HybridRetriever | None = None
         self.qdrant_index: QdrantLocalIndex | None = None
+        self.doc_index: Any | None = None
 
         if self.config.retrieval.engine == "qdrant":
             self.qdrant_index = QdrantLocalIndex(
@@ -252,8 +253,10 @@ class MedicalRetrievalPipeline:
         dense_dir: str | Path | None = None,
         sparse_dir: str | Path | None = None,
         chunks_meta_path: str | Path | None = None,
+        doc_index_path: str | Path | None = None,
+        doc_metadata_path: str | Path | None = None,
     ):
-        """Loads FAISS and BM25 indices from disk (supports separate paths for dense, sparse, and metadata)."""
+        """Loads FAISS, BM25, and Doc-level indices from disk (supports separate paths)."""
         idx_dir = Path(indices_dir)
         d_dir = Path(dense_dir) if dense_dir else idx_dir
         s_dir = Path(sparse_dir) if sparse_dir else idx_dir
@@ -282,6 +285,32 @@ class MedicalRetrievalPipeline:
             logger.warning(f"SparseIndex not found: {e}. Operating in dense-only mode.")
         except Exception as e:
             logger.warning(f"Failed to load SparseIndex ({type(e).__name__}: {e}). Operating in dense-only mode.")
+
+        # Load DocIndex (878,943 articles) if available
+        doc_faiss_candidates = [
+            Path(doc_index_path) if doc_index_path else None,
+            d_dir / "doc_index_sq8.faiss",
+            d_dir / "doc_index.faiss",
+            idx_dir / "doc_index_sq8.faiss",
+            idx_dir / "doc_index.faiss",
+        ]
+        doc_meta_candidates = [
+            Path(doc_metadata_path) if doc_metadata_path else None,
+            d_dir / "doc_metadata.parquet",
+            idx_dir / "doc_metadata.parquet",
+        ]
+        resolved_doc_faiss = next((p for p in doc_faiss_candidates if p and p.exists() and p.stat().st_size > 0), None)
+        resolved_doc_meta = next((p for p in doc_meta_candidates if p and p.exists() and p.stat().st_size > 0), None)
+
+        if resolved_doc_faiss and resolved_doc_meta:
+            try:
+                from src.retrieval.doc_index import DocIndex
+                self.doc_index = DocIndex(resolved_doc_faiss, resolved_doc_meta)
+                self.doc_index.load()
+                logger.info("DocIndex (Global Article-level) successfully loaded.")
+            except Exception as e:
+                logger.warning(f"Could not load DocIndex: {e}")
+
         logger.info("Indices loading process completed.")
 
     def _share_chunk_meta_store(self):
@@ -489,6 +518,15 @@ class MedicalRetrievalPipeline:
             logger.warning(f"No candidate documents found for query: '{query}'")
             return {"relevant_docs": [], "relevant_chunks": []}
 
+        # 5. Global Document Search via DocIndex (878,943 articles)
+        global_doc_candidates: list[str | int] | None = None
+        if self.doc_index is not None:
+            try:
+                doc_hits = self.doc_index.search(q_emb, top_k=self.config.reranker.top_k_docs + 100)
+                global_doc_candidates = [r["doc_id"] for r in doc_hits]
+            except Exception as e:
+                logger.warning(f"Error searching DocIndex: {e}")
+
         if self.reranker and self.config.reranker.enabled:
             expand_top_docs = getattr(self.config.reranker, "expand_top_docs", 0)
             expand_provider = None
@@ -511,6 +549,7 @@ class MedicalRetrievalPipeline:
                 expand_max_chunks_per_doc=getattr(
                     self.config.reranker, "expand_max_chunks_per_doc", 8
                 ),
+                global_doc_candidates=global_doc_candidates,
             )
 
         else:

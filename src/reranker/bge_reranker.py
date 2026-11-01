@@ -148,6 +148,7 @@ class BGEReranker:
         expand_provider: Callable[[list[str], int], list[dict[str, Any]]] | None = None,
         expand_top_docs: int = 0,
         expand_max_chunks_per_doc: int = 8,
+        global_doc_candidates: list[str | int] | None = None,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Reranks candidate chunks and extracts top relevant documents and chunks.
 
@@ -193,14 +194,23 @@ class BGEReranker:
         # never scored; this closes that gap for the documents we already trust.
         if expand_provider is not None and expand_top_docs > 0:
             provisional_docs: list[str] = []
-            seen_docs: set[str] = set()
+            seen_docs_exp: set[str] = set()
             for c in valid_candidates:
                 did = str(c["doc_id"])
-                if did not in seen_docs:
-                    seen_docs.add(did)
+                if did not in seen_docs_exp:
+                    seen_docs_exp.add(did)
                     provisional_docs.append(did)
                 if len(provisional_docs) >= expand_top_docs:
                     break
+
+            if global_doc_candidates and len(provisional_docs) < expand_top_docs:
+                for gdid in global_doc_candidates:
+                    sdid = str(gdid)
+                    if sdid not in seen_docs_exp:
+                        seen_docs_exp.add(sdid)
+                        provisional_docs.append(sdid)
+                    if len(provisional_docs) >= expand_top_docs:
+                        break
 
             extra = expand_provider(provisional_docs, expand_max_chunks_per_doc)
             known = {(str(c["doc_id"]), c.get("chunk_text", "")) for c in valid_candidates}
@@ -230,6 +240,16 @@ class BGEReranker:
                 doc_ids.append(did)
             if len(doc_ids) >= top_k_docs:
                 break
+
+        # 1.1 Fill remaining document quota from global_doc_candidates (e.g. DocIndex 878k articles)
+        if global_doc_candidates and len(doc_ids) < top_k_docs:
+            for gdid in global_doc_candidates:
+                sdid = str(gdid)
+                if sdid not in seen_docs:
+                    seen_docs.add(sdid)
+                    doc_ids.append(gdid)
+                if len(doc_ids) >= top_k_docs:
+                    break
 
         # 2. Balanced chunk selection with two-pass recall safeguard:
         # Pass 1 (Diversity): Select up to max_chunks_per_doc per document to prevent single-doc domination

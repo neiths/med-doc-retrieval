@@ -81,6 +81,18 @@ def main():
         help="Custom path to chunks metadata file (chunks_meta_slim.sqlite, chunks_meta.sqlite, or chunks_meta.parquet).",
     )
     parser.add_argument(
+        "--doc-index-path",
+        type=Path,
+        default=None,
+        help="Custom path to DocIndex FAISS file (doc_index_sq8.faiss or doc_index.faiss).",
+    )
+    parser.add_argument(
+        "--doc-metadata-path",
+        type=Path,
+        default=None,
+        help="Custom path to Doc Metadata Parquet file (doc_metadata.parquet).",
+    )
+    parser.add_argument(
         "--queries",
         type=Path,
         default=None,
@@ -270,16 +282,24 @@ def main():
                     ("indices/dense_index_sq8.faiss", str(dense_dir / "dense_index_sq8.faiss")),
                     ("indices/chunks_meta_slim.sqlite", str(dense_dir / "chunks_meta_slim.sqlite")),
                     ("indices/dense_metadata_sq8.json", str(dense_dir / "dense_metadata_sq8.json")),
+                    ("indices/doc_index_sq8.faiss", str(dense_dir / "doc_index_sq8.faiss")),
+                    ("indices/doc_metadata.parquet", str(dense_dir / "doc_metadata.parquet")),
                 ]
-                logger.info("📥 Auto-downloading lightweight SQ8 index + slim SQLite (~4.9 GB) from HF Bucket 'nieths/ViBioMIR'...")
-                api.download_bucket_files(
-                    bucket_id="nieths/ViBioMIR",
-                    files=download_files,
-                    token=hf_token,
-                )
+                # Filter to only missing files to avoid re-downloading
+                missing_downloads = [
+                    (remote, local) for remote, local in download_files
+                    if not Path(local).exists() or Path(local).stat().st_size == 0
+                ]
+                if missing_downloads:
+                    logger.info(f"📥 Auto-downloading {len(missing_downloads)} missing files from HF Bucket 'nieths/ViBioMIR'...")
+                    api.download_bucket_files(
+                        bucket_id="nieths/ViBioMIR",
+                        files=missing_downloads,
+                        token=hf_token,
+                    )
                 if (dense_dir / "dense_index_sq8.faiss").exists():
                     dense_file = dense_dir / "dense_index_sq8.faiss"
-                    logger.info("✅ Successfully downloaded SQ8 index from Hugging Face Bucket!")
+                    logger.info("✅ Verified dense FAISS index!")
             except Exception as e:
                 logger.warning(f"Could not auto-download from HF Bucket: {e}")
 
@@ -326,6 +346,8 @@ def main():
         dense_dir=dense_dir,
         sparse_dir=sparse_path,
         chunks_meta_path=chunks_meta_path,
+        doc_index_path=args.doc_index_path,
+        doc_metadata_path=args.doc_metadata_path,
     )
 
     # Resolve queries path

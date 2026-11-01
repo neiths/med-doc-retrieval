@@ -1,6 +1,7 @@
 """Retrieval package."""
 
 from src.retrieval.dense_index import DenseIndex
+from src.retrieval.doc_index import DocIndex
 from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.qdrant_index import (
     QdrantLocalIndex,
