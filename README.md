@@ -70,19 +70,20 @@ Hệ thống xử lý hơn **2.3 triệu chunks** mà không gặp tình trạng
 - **BM25s Lexical Index (`bm25s_index/` ~3.4GB):** Ứng dụng thư viện `bm25s` hiện đại nhất dựa trên Scipy CSR Matrix và Memory Mapping, loại bỏ hoàn toàn chi phí nạp ma trận sparse khổng lồ vào RAM.
 - **SQLite Slim Metadata (`chunks_meta_slim.sqlite` ~5.1GB):** Toàn bộ metadata (tiêu đề, văn bản chunk, ngôn ngữ, doc_id) được lưu trong SQLite và đánh chỉ mục B-Tree trên `chunk_id` và `doc_id`. Hỗ trợ truy vấn đa luồng an toàn với `check_same_thread=False` và cơ chế chống nghẽn `threading.Lock`.
 
-### 2. Chiến Lược "Top-1 Winning Chunk" Tối Ưu Macro F2 Leaderboard
+### 2. Tối Ưu Hóa Ngân Sách Đầu Ra Theo Độ Đo Macro F2 (300 Documents & 150 Chunks)
 Phân tích toán học độ đo chính thức của cuộc thi:
 $$F_2 = \frac{5 \times \mathrm{Precision} \times \mathrm{Recall}}{4 \times \mathrm{Precision} + \mathrm{Recall}}$$
-- **Vấn đề đã nhận diện:** Khi nộp quá nhiều chunks cho một tài liệu (ví dụ 60 tài liệu với 120 chunks), độ bao phủ (Recall) tăng nhẹ nhưng độ chính xác (Precision) giảm mạnh xuống dưới 0.10, khiến mẫu số kéo tụt $F_2$ xuống mức 0.16.
-- **Bí quyết từ Top Leaderboard (`ongthomiu` 0.4871, `toptire` 0.4274):** Các đội dẫn đầu luôn đạt được tỉ lệ $DOCS\_PRECISION \approx CHUNKS\_PRECISION \approx 0.24-0.27$ và $DOCS\_RECALL \approx CHUNKS\_RECALL \approx 0.60-0.66$.
-- **Chiến lược áp dụng:** Giữ nguyên tắc **1 Document = 1 Winning Chunk** (`max_chunks_per_doc = 1`, `top_k_docs = 4-5`, `top_k_chunks = 4-5`). Chunk được chọn là chunk có điểm Cross-Encoder cao nhất của tài liệu đó.
+- **Đặc tính trọng số:** Trong công thức Macro $F_2$ ($\beta = 2$), độ bao phủ **Recall có sức nặng gấp 4 lần so với Precision**. Một tài liệu hoặc đoạn văn đúng được truy hồi thêm sẽ bù đắp được sự sụt giảm độ chính xác của nhiều kết quả phụ.
+- **Phân bổ ngân sách tối ưu:**
+  * **300 Documents:** Kết hợp giữa danh sách ứng viên Top từ chỉ mục toàn cục 878.943 tài liệu (`doc_index_sq8.faiss`) và tài liệu chứa chunk có điểm Cross-Encoder cao nhất, giúp đẩy `DOCS_RECALL` lên $> 55\%$ và `DOCS_F2MACRO` đạt đỉnh **~0.288**.
+  * **150 Chunks:** Trích xuất các đoạn văn bản đạt điểm số tương quan cao nhất từ `BAAI/bge-reranker-v2-m3`, khống chế tối đa 3 chunks trên một tài liệu (`max_chunks_per_doc = 3`) nhằm giữ tính đa dạng của bằng chứng và bảo toàn độ dài chuẩn ~750 ký tự thỏa mãn điều kiện LCS 2 chiều $\ge 0.40$.
 
-### 3. Quy Trình Truy Hồi 4 Giai Đoạn (Multi-Stage Retrieval)
-1. **Giai đoạn 1A (Dense Retrieval):** Nhúng câu hỏi bằng `BAAI/bge-m3` và truy vấn FAISS SQ8 lấy Top-$K$ semantic vector.
-2. **Giai đoạn 1B (Sparse Retrieval):** Tokenize câu hỏi tiếng Việt / tiếng Trung và tìm kiếm từ khóa chính xác qua BM25s lấy Top-$K$ lexical match.
-3. **Giai đoạn 2 (RRF Fusion):** Hợp nhất danh sách ứng viên bằng Reciprocal Rank Fusion ($k=60$), cân bằng cả từ khóa chính xác và ngữ nghĩa tương đương.
-4. **Giai đoạn 3 (Cross-Encoder Reranking):** Đưa các cặp `(Query, Chunk)` qua mô hình `BAAI/bge-reranker-v2-m3` (SOTA đa ngữ), chấm điểm tương quan chi tiết.
-5. **Giai đoạn 4 (Trích xuất Bằng chứng):** Lọc theo chiến lược Top-1 để tạo đầu ra tối ưu cho submission.
+### 3. Quy Trình Truy Hồi Đa Tầng (Multi-Tier Retrieval Pipeline)
+1. **Giai đoạn 1A (Dense Retrieval):** Nhúng câu hỏi mở rộng HyDE bằng `BAAI/bge-m3` và truy vấn FAISS SQ8 lấy Top-$K$ semantic vector ở cả cấp tài liệu (878k docs) và cấp đoạn văn (2.32M chunks).
+2. **Giai đoạn 1B (Sparse Retrieval):** Tokenize câu hỏi và tìm kiếm từ khóa chính xác qua BM25s lấy Top-$K$ lexical match.
+3. **Giai đoạn 2 (RRF Fusion & Expansion):** Hợp nhất danh sách ứng viên bằng Reciprocal Rank Fusion ($k=60$), đồng thời mở rộng quét toàn bộ chunk của Top bài viết uy tín nhất qua SQLite Slim.
+4. **Giai đoạn 3 (Cross-Encoder Reranking):** Đưa các cặp `(Query, Chunk)` qua mô hình `BAAI/bge-reranker-v2-m3` (FP16), chấm điểm tương quan ngữ nghĩa sâu sắc.
+5. **Giai đoạn 4 (Phân bổ Ngân sách & Đóng gói):** Lọc theo ngân sách tối ưu Macro F2 (300 docs, 150 chunks) và xuất gói bài nộp `submission.zip` chuẩn cấu trúc CodaBench.
 
 ### 4. Xử Lý Văn Bản Chuyên Sâu & Phân Đoạn Giữ Ranh Giới Câu
 - **Giải mã Mojibake Tiếng Trung (`fix_mojibake`):** Phát hiện và đảo ngược lỗi giải mã GB18030 thành UTF-8 nguyên bản cho hàng ngàn bài viết tiếng Trung (ví dụ `鐧界櫆...` $\to$ `白癜风...`).
@@ -158,11 +159,9 @@ med-doc-retrieval/
 │   │   └── pubmed_cache.jsonl       # 21.377 bài báo PubMed đã lưu đệm
 │   └── raw/                         # Dữ liệu cào thô (crawled_shard_*.jsonl) & queries.jsonl
 ├── notebooks/
-│   ├── 01_kaggle_build_bm25_cpu.ipynb                  # Notebook build BM25s index trên Kaggle CPU
-│   ├── 02_kaggle_build_dense_gpu.ipynb                 # Notebook embed BGE-M3 trên Kaggle GPU
-│   ├── 07_deep_data_analysis_and_corpus_insights.ipynb # Phân tích chuyên sâu corpus đa ngữ
-│   ├── 09_kaggle_quantize_and_slim_indices.ipynb       # Lượng tử hóa FAISS SQ8 & tạo SQLite Slim
-│   ├── 10_interactive_retrieval_and_evaluation.ipynb   # Thực nghiệm tìm kiếm 4 giai đoạn & Top-1
+│   ├── 13_build_doc_level_faiss_index.ipynb            # Xây dựng chỉ mục FAISS SQ8 cho 878k tài liệu
+│   ├── 14_llm_hyde_and_query_expansion.ipynb          # Mở rộng truy vấn lâm sàng HyDE bằng Qwen2.5 4-bit
+│   ├── 15_kaggle_full_inference_all_in_one.ipynb       # Notebook suy luận 1-Click tái lập bài nộp
 │   └── inference-queries.ipynb                         # Pipeline suy luận nộp bài trên Kaggle
 ├── scripts/
 │   ├── convert_jsonl_to_parquet.py  # Chuyển đổi và nén dữ liệu cào sang Parquet ZSTD
@@ -210,7 +209,7 @@ med-doc-retrieval/
 | **Metadata Storage** | **SQLite Slim Index** | Thay thế JSON metadata cồng kềnh; tra cứu $O(1)$ qua B-Tree; hỗ trợ đa luồng. |
 | **Embedding Model** | `BAAI/bge-m3` (**FP16**) | Trích xuất biểu diễn ngữ nghĩa đa ngữ 1024 chiều (VI-ZH-EN), $\le 14B$ params. |
 | **Cross-Encoder Reranker**| `BAAI/bge-reranker-v2-m3` (**FP16**) | Mô hình reranker đa ngữ mạnh nhất hiện nay cho y sinh, phân định ngữ cảnh chi tiết. |
-| **Chiến lược Rerank** | **Top-1 Winning Chunk per Doc** | Cân bằng tuyệt đối Precision & Recall, tối đa hóa điểm Macro F2 cho bảng xếp hạng. |
+| **Phân bổ Ngân sách** | **300 Docs + 150 Chunks** | Tối ưu hóa theo trọng số Recall 4x của Macro F2, tối đa hóa điểm số trên CodaBench. |
 | **Độ đo đánh giá** | Macro F2 ($\beta = 2.0$) | Ưu tiên Recall gấp 2 lần Precision; chunk-level đánh giá theo độ trùng khớp chuỗi con. |
 
 ---
@@ -314,7 +313,7 @@ uv run python main.py generate-submission --queries data/raw/queries.jsonl --nam
 2. [x] **Schema trường hợp lệ:** Mỗi phần tử gồm `id` (int), `relevant_docs` (list string), `relevant_chunks` (list object `{"doc_id": "...", "chunk_text": "..."}`).
 3. [x] **Định dạng `doc_id`:** Với bài viết tiếng Việt/Trung giữ nguyên `id` gốc từ BTC; với tài liệu PubMed tiếng Anh **bắt buộc là mã PMID**.
 4. [x] **Văn bản `chunk_text`:** Phải là chuỗi con trích xuất nguyên bản 100% từ tài liệu gốc, không tự ý tóm tắt hoặc viết lại.
-5. [x] **Tối ưu số lượng Chunk:** Giữ giới hạn 4-5 docs và 4-5 chunks theo chiến lược Top-1 để duy trì Precision $> 0.20$, đưa Macro F2 lên mức tối đa.
+5. [x] **Tối ưu ngân sách Macro F2:** Xuất 300 docs và 150 chunks (tối đa 3 chunks/doc) theo công thức F2 để đạt Recall tối đa (>55%) mà vẫn bảo toàn độ dài chunk ~750 ký tự thỏa mãn điều kiện LCS 2 chiều >= 0.40.
 
 ---
 
