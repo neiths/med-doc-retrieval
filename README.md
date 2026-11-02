@@ -2,69 +2,62 @@
 
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![uv](https://img.shields.io/badge/environment-uv-purple.svg)](https://github.com/astral-sh/uv)
-[![Dense Index](https://img.shields.io/badge/Dense_Index-FAISS_SQ8_(MMAP)-red.svg)](https://github.com/facebookresearch/faiss)
-[![Sparse Index](https://img.shields.io/badge/Sparse_Index-BM25s_(MMAP)-orange.svg)](https://github.com/xhluca/bm25s)
+[![Doc Index](https://img.shields.io/badge/Doc_Index-FAISS_SQ8_(878k_docs)-red.svg)](https://github.com/facebookresearch/faiss)
+[![Chunk Index](https://img.shields.io/badge/Chunk_Index-FAISS_SQ8_(2.32M_chunks)-orange.svg)](https://github.com/facebookresearch/faiss)
+[![LLM HyDE](https://img.shields.io/badge/LLM_HyDE-Qwen2.5--3B--Instruct_(4bit)-yellow.svg)](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct)
 [![Embedding](https://img.shields.io/badge/Embedding-BGE--M3_(FP16)-green.svg)](https://huggingface.co/BAAI/bge-m3)
 [![Reranker](https://img.shields.io/badge/Reranker-BGE--Reranker--v2--m3_(FP16)-blueviolet.svg)](https://huggingface.co/BAAI/bge-reranker-v2-m3)
-[![UI Explorer](https://img.shields.io/badge/Interactive_UI-Streamlit-ff4b4b.svg)](apps/doc_chunk_viewer.py)
-[![Tests](https://img.shields.io/badge/tests-37%2F37_passing-brightgreen.svg)](tests/)
+[![Kaggle 1-Click](https://img.shields.io/badge/Kaggle-1--Click_Execution-20BEFF.svg)](notebooks/15_kaggle_full_inference_all_in_one.ipynb)
 
-Hệ thống truy hồi thông tin y sinh đa ngôn ngữ (**Multilingual Medical Document Retrieval System**) quy mô lớn (2.3+ triệu chunks) được thiết kế tối ưu cho cuộc thi **ViBioMIR / Road to AI 2026 (R2AI)**.
-
-Hệ thống giải quyết bài toán "khoảng cách tri thức y khoa" xuyên biên giới ngôn ngữ:
-- **Truy vấn đầu vào (Query):** Tiếng Việt (VI) gồm các câu hỏi lâm sàng, triệu chứng, phác đồ điều trị, dược động học.
-- **Kho tri thức truy hồi (Corpus):** Đa ngôn ngữ (**Tiếng Việt - Tiếng Anh - Tiếng Trung**), bao gồm hàng chục nghìn bài viết y khoa cào từ các trang chính thống và hàng triệu abstracts từ PubMed.
-- **Mục tiêu đánh giá:** Định vị chính xác tài liệu liên quan (**Document-level**) và trích xuất nguyên vẹn đoạn văn bản chứa bằng chứng y khoa (**Chunk-level**) tối ưu theo độ đo **Macro F2** ($\beta = 2$).
+> 📑 **TÀI LIỆU THUYẾT MINH SẢN PHẨM CHÍNH THỨC (NỘP BTC ROAD TO AI 2026):**  
+> Vui lòng xem bản thuyết minh chi tiết đầy đủ 5 phần tại: [**`docs/BAN_THUYET_MINH_SAN_PHAM_R2AI_STAGE3.md`**](docs/BAN_THUYET_MINH_SAN_PHAM_R2AI_STAGE3.md).  
+> 🚀 **KAGGLE 1-CLICK NOTEBOOK (TÁI LẬP KẾT QUẢ):** [**`notebooks/15_kaggle_full_inference_all_in_one.ipynb`**](notebooks/15_kaggle_full_inference_all_in_one.ipynb)
 
 ---
 
-## 🏗️ Kiến Trúc Hệ Thống (System Architecture)
+Hệ thống truy hồi thông tin y sinh học đa ngôn ngữ (**Multilingual Medical Document & Chunk Retrieval System**) quy mô lớn (878.000+ tài liệu, 2.3+ triệu chunks) được thiết kế tối ưu cho cuộc thi **ViBioMIR / Road to AI 2026 (R2AI) – Stage 3**.
 
-```text
-                                     [User Query (VI)]
-                                             │
-                     ┌───────────────────────┴───────────────────────┐
-                     ▼                                               ▼
-        [Mở Rộng Truy Vấn Đa Ngữ]                       [Truy Xuất Ngoại Tuyến PubMed (EN)]
-        ├── Cây Ontology ICD-10 (VI-EN-ZH)               ├── Trích xuất MeSH Keywords (EN)
-        ├── Từ điển viết tắt y khoa (STEMI, HFrEF,...)   ├── Europe PMC & NCBI Entrez Cache
-        └── 1.200 Enriched Queries (Offline Precomputed) └── 21.377 PubMed Articles Cache
-                     │                                               │
-                     ▼                                               │
-    [Enriched Medical Query (VI + ZH + EN)]                          │
-                     │                                               │
-                     ├───────────────────────────────┐               │
-                     ▼                               ▼               │
-      [Dense Semantic Retriever]         [BM25s Lexical Retriever]   │
-      ├── Model: BAAI/bge-m3 (FP16)      ├── Zero-Copy MMAP Index    │
-      ├── FAISS SQ8 Scalar Quantized     ├── 1.629.691 Chunks        │
-      ├── 2.318.540 Vectors (~2.3GB)     └── Vietnamese + Chinese    │
-      └── Zero-Copy Memory Mapped (MMAP)             │               │
-                     │                               │               │
-                     └───────────────┬───────────────┘               │
-                                     │                               │
-                                     ▼                               │
-                       [Reciprocal Rank Fusion (RRF)]                │
-                       ├── Công thức: RRF(d) = Σ 1 / (60 + rank(d))  │
-                       └── Top Candidates Selection                  │
-                                     │                               │
-                                     ├───────────────────────────────┘
-                                     ▼
-                [BAAI/bge-reranker-v2-m3 Cross-Encoder]
-                ├── Chấm điểm cặp (Query, Contextual Chunk Text)
-                ├── Chạy FP16 trên GPU (Tự động fallback CPU)
-                └── Xếp hạng lại theo tương quan ngữ nghĩa sâu
-                                     │
-                                     ▼
-           [Top-1 Evidence Strategy (Macro F2 Optimizer)]
-           ├── 1 Document = 1 Winning Chunk (max_chunks_per_doc: 1)
-           ├── Top 4-5 Documents & Top 4-5 Chunks
-           └── Bảo toàn 100% chunk_text nguyên bản tài liệu
-                                     │
-                                     ▼
-                [Streamlit UI & Submission Packager]
-                ├── Apps UI: Phân tích trực quan 4 giai đoạn & BM25
-                └── Leaderboard: Tự động đóng gói ZIP phẳng chuẩn BTC
+Hệ thống giải quyết trọn vẹn "khoảng cách tri thức và ngôn ngữ" trong y văn lâm sàng:
+- **Truy vấn đầu vào (Query):** Tiếng Việt (VI) gồm các câu hỏi lâm sàng, triệu chứng, phác đồ điều trị, dược động học.
+- **Mở rộng truy vấn HyDE (Hypothetical Document Embeddings):** Ứng dụng LLM `Qwen/Qwen2.5-3B-Instruct` suy luận lâm sàng, sinh giả thuyết chẩn đoán phân biệt, triệu chứng liên quan và từ khóa MeSH/ICD-10 tam ngữ (VI - EN - ZH).
+- **Kho tri thức truy hồi (Corpus):** Đa ngôn ngữ (**Tiếng Việt - Tiếng Anh PubMed - Tiếng Trung Quốc**), bao gồm 878.943 bài viết y khoa và 21.377 abstracts PubMed.
+- **Mục tiêu đánh giá:** Tối ưu hóa điểm số **Macro F2** ($\beta = 2$, Recall quan trọng gấp 4 lần Precision) và thỏa mãn $100\%$ điều kiện xâu con chung dài nhất 2 chiều của BTC:
+  $$\frac{\text{LCS}(pred, gt)}{\text{len}(pred)} \ge 0.40 \quad \text{và} \quad \frac{\text{LCS}(pred, gt)}{\text{len}(gt)} \ge 0.40$$
+
+---
+
+## 🏗️ Kiến Trúc Hệ Thống (Two-Tier Hierarchical Architecture)
+
+```mermaid
+flowchart TD
+    subgraph Step1["1. Clinical HyDE Expansion"]
+        Q["Câu hỏi lâm sàng Tiếng Việt"] --> HyDE["Qwen2.5-3B-Instruct (4-bit NF4)"]
+        HyDE -->|"Sinh chẩn đoán phân biệt & từ khóa MeSH/ICD-10"| EQ["Enriched Clinical Query (VI + EN + ZH)"]
+    end
+
+    subgraph Step2["2. Two-Tier Hierarchical Retrieval"]
+        EQ -->|"BGE-M3 Dense Vector"| Vec["Query Vector (1024-d, FP16)"]
+        Vec -->|"Tier 1: Quét 878k bài viết"| DocIdx["Doc-Level FAISS SQ8 (MMAP)"]
+        Vec -->|"Tier 2: Quét 2.32M đoạn văn"| ChunkDense["Chunk FAISS SQ8 (MMAP)"]
+        EQ -->|"Tier 2: BM25s Lexical Match"| ChunkBM25["Chunk BM25s Index (MMAP)"]
+        
+        DocIdx -->|"Top 400 Global Docs"| PoolDocs["Global Candidate Docs"]
+        ChunkDense & ChunkBM25 -->|"RRF Fusion (k=60)"| PoolChunks["Top 350 Candidate Chunks"]
+    end
+
+    subgraph Step3["3. Deep Intra-Doc Expansion & Reranking"]
+        PoolDocs & PoolChunks --> Expander["SQLite B-Tree Intra-Doc Expander"]
+        Expander -->|"Kéo toàn bộ chunks thuộc Top Docs"| FullChunks["~500 Candidate Chunks"]
+        FullChunks & EQ --> Reranker["BAAI/bge-reranker-v2-m3 (Cross-Encoder)"]
+        Reranker -->|"Full Self-Attention Scoring"| ScoredChunks["Reranked Evidence Chunks"]
+    end
+
+    subgraph Step4["4. Macro F2 Optimal Budget Packaging"]
+        ScoredChunks & PoolDocs --> Budget["Bộ phân bổ ngân sách Macro F2"]
+        Budget -->|"Top 300 Documents (Recall > 55%)"| OutDocs["300 Documents"]
+        Budget -->|"Top 150 Chunks (Chuẩn 750 chars, max 3/doc)"| OutChunks["150 Chunks"]
+        OutDocs & OutChunks --> Pack["submission.zip (Cấu trúc phẳng CodaBench)"]
+    end
 ```
 
 ---
@@ -222,33 +215,49 @@ med-doc-retrieval/
 
 ---
 
-## 🚀 Hướng Dẫn Khởi Chạy Nhanh (Quickstart)
+## 🚀 Hướng Dẫn Tái Lập Nhanh (Reproducibility & Quickstart)
 
-### Bước 1: Khởi tạo Môi trường với `uv`
+### Phương án 1: Tái hiện 1-Click trên Kaggle (Khuyến nghị cho BTC)
+1. Mở Kaggle và chọn cấu hình **Accelerator: GPU T4 x 2** (hoặc P100), bật **Internet: ON**.
+2. Upload và chạy toàn bộ notebook: [**`notebooks/15_kaggle_full_inference_all_in_one.ipynb`**](notebooks/15_kaggle_full_inference_all_in_one.ipynb).
+3. Notebook sẽ tự động tải các bộ chỉ mục từ Hugging Face Bucket `nieths/ViBioMIR`, thực hiện inference cho 1.200 queries và xuất ra file `submission.zip` đạt chuẩn trong ~12 phút.
+
+### Phương án 2: Tái hiện qua môi trường CLI (Local / Linux Server)
 ```bash
-# Cài đặt toàn bộ dependencies bao gồm các công cụ dev
-uv sync --extra dev
+# 1. Clone mã nguồn
+git clone https://github.com/neiths/med-doc-retrieval.git
+cd med-doc-retrieval
 
-# Kích hoạt môi trường ảo
+# 2. Cài đặt môi trường ảo và thư viện (hỗ trợ cả pip và uv)
+python3 -m venv .venv
 source .venv/bin/activate
-```
+pip install -r requirements.txt
+# (Hoặc nếu dùng uv: uv sync --extra dev)
 
-### Bước 2: Tải trước Trọng số Mô hình (Offline Ready)
-```bash
-# Tải và warm-up weights BGE-M3 và BGE-Reranker-v2-m3 vào cache local
-uv run python scripts/preload_models.py
-```
+# 3. Tải bộ chỉ mục từ Hugging Face Bucket
+mkdir -p data/indices data/processed outputs/submissions
+hf buckets cp hf://buckets/nieths/ViBioMIR/indices/doc_index_sq8.faiss data/indices/doc_index_sq8.faiss
+hf buckets cp hf://buckets/nieths/ViBioMIR/indices/doc_metadata.parquet data/indices/doc_metadata.parquet
+hf buckets cp hf://buckets/nieths/ViBioMIR/indices/dense_index_sq8.faiss data/indices/dense_index_sq8.faiss
+hf buckets cp hf://buckets/nieths/ViBioMIR/indices/chunks_meta_slim.sqlite data/indices/chunks_meta_slim.sqlite
+hf buckets cp hf://buckets/nieths/ViBioMIR/processed/queries_hyde.jsonl data/processed/queries_hyde.jsonl
 
-### Bước 3: Chạy Kiểm Thử Tự Động (Unit Tests)
-```bash
-# Đảm bảo toàn bộ 37 bài kiểm thử đều PASS (100%)
-uv run pytest tests/
-```
+# 4. Chạy quy trình Inference và đóng gói bài thi
+python scripts/run_inference_only.py \
+    --queries data/processed/queries_hyde.jsonl \
+    --doc-index-path data/indices/doc_index_sq8.faiss \
+    --doc-metadata-path data/indices/doc_metadata.parquet \
+    --dense-index-path data/indices/dense_index_sq8.faiss \
+    --chunks-meta-path data/indices/chunks_meta_slim.sqlite \
+    --top-k-docs 300 \
+    --top-k-chunks 150 \
+    --max-chunks-per-doc 3 \
+    --expand-top-docs 30 \
+    --batch-size 32 \
+    --output outputs/submissions/submission.jsonl
 
-### Bước 4: Mở Giao Diện Tra Cứu Trực Quan (Streamlit UI)
-```bash
-# Khởi chạy giao diện phân tích 4 giai đoạn và tra cứu văn bản
-streamlit run apps/doc_chunk_viewer.py
+# 5. Đóng gói ZIP phẳng chuẩn CodaBench BTC
+cd outputs/submissions && zip -j submission.zip submission.jsonl && cd ../..
 ```
 
 ---
