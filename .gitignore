@@ -194,14 +194,16 @@ cython_debug/
 #   Learn more at https://abstra.io/docs
 .abstra/
 
-# Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-# Temporary file for partial code execution
+# Visual Studio Code & IDEs
+.vscode/
+.idea/
+*.swp
+*~
 tempCodeRunnerFile.py
+
+# Operating System Files
+.DS_Store
+Thumbs.db
 
 # Ruff stuff:
 .ruff_cache/
@@ -216,6 +218,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Process logs & background execution
+logs/
+*.log
+*.pid
+crawl.log
+
+# Temporary and partial runtime files
+*.partial.jsonl
+*.tmp
+*.temp
 
 # Competition data & local artifacts
 data/raw/*
@@ -236,7 +249,22 @@ outputs/*
 *.pt
 *.safetensors
 
+# Binary indices and model caches
+*.faiss
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+!data/raw/query.parquet
+!data/raw/links_corpus.parquet
+
 # Lexicon raw intermediate caches
 data/lexicon/*_raw.json
 data/lexicon/who_icd10_codes.csv
+
+# Large exploratory or scratch notebooks (kept locally, excluded from git)
+notebooks/EDA_corpus_data.ipynb
+notebooks/notebook*.ipynb
+notebooks/*_scratch*.ipynb
+
 
